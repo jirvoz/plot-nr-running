@@ -70,7 +70,7 @@ def draw_report(time_axis, map_values, differences, imbalances, image_file=None,
     ax.add_collection(lc)
 
     plt.ylabel("CPUs")
-    plt.xlabel("Timestamp")
+    plt.xlabel("Timestamp (seconds)")
 
     # Separate CPUs with lines by NUMA nodes
     if numa_cpus:
@@ -131,6 +131,7 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
     map_values.append(last_row)
 
     last_imbalance_start = 0
+    point_time = 0
     for line in input_file:
         data = line.split()
         #point_time = datetime.fromtimestamp(float(data[2].strip(':')))
@@ -167,6 +168,17 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
             differences.append(diff)
             time_axis.append(point_time)
         last_row = row
+
+    # Check for unreported imbalance lasting to the very end of input
+    if last_imbalance_start != 0 \
+       and (point_time - last_imbalance_start) >= duration:
+        imbalances.append([(last_imbalance_start, threshold),
+                            (point_time, threshold)])
+        print("Imbalance from timestamp " \
+                + str(last_imbalance_start) \
+                + " lasting " \
+                + str(point_time - last_imbalance_start) \
+                + " seconds")
 
     if not imbalances:
         print("No imbalance found")
