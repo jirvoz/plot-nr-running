@@ -135,6 +135,11 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
     for line in input_file:
         data = line.split()
         #point_time = datetime.fromtimestamp(float(data[2].strip(':')))
+
+        # Check the correct event
+        if data[3].strip(':') != "sched_update_nr_running":
+            continue
+
         point_time = float(data[2].strip(':'))
         cpu = int(data[4].split('=')[1])
         value = int(data[5].split('=')[1])
