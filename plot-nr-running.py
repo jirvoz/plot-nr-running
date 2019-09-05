@@ -126,7 +126,6 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
     counter = 0
 
     cpus_count = int(input_file.readline().split('=')[1])
-    # TODO add the last row in plotting function
     last_row = np.zeros(cpus_count)
     map_values.append(last_row)
 
@@ -134,7 +133,6 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
     point_time = 0
     for line in input_file:
         data = line.split()
-        #point_time = datetime.fromtimestamp(float(data[2].strip(':')))
 
         # Check the correct event
         if data[3].strip(':') != "sched_update_nr_running":
@@ -215,5 +213,4 @@ if __name__ == '__main__':
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    print("Processing", args.input_file.name)
     process_report(args.input_file, args.sampling, args.threshold, args.duration, args.image_file, numa_cpus)
