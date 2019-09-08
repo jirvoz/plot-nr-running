@@ -47,7 +47,7 @@ def draw_report(time_axis, map_values, differences, imbalances, image_file=None,
     # Add blank row to correctly plot all rows with data
     map_values = np.vstack((map_values, np.zeros(map_values.shape[1])))
 
-    cmap = ListedColormap(['#300040', '#305090', '#40b080', '#f0e020', '#f06020'])
+    cmap = ListedColormap(['#300040', '#305090', '#40b080', '#f0e020', '#f04010'])
     boundaries = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = BoundaryNorm(boundaries, cmap.N, clip=True)
 
@@ -86,6 +86,7 @@ def draw_report(time_axis, map_values, differences, imbalances, image_file=None,
 
     cbar = fig.colorbar(mesh, cax=plt.axes((0.95, 0.1, 0.02, 0.85)), extend='max',
                         ticks=range(5))
+    cbar.ax.set_yticklabels(['0', '1', '2', '3', '4+'])  # vertically oriented colorbar
 
     if image_file:
         plt.savefig(image_file)
