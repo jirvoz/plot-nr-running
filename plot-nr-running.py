@@ -24,6 +24,7 @@ import argparse
 from datetime import datetime, timedelta
 import math
 import sys
+import re
 
 import numpy as np
 # import matplotlib
@@ -132,16 +133,22 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
 
     last_imbalance_start = 0
     point_time = 0
+    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) nr_running=(\d+)")
     for line in input_file:
-        data = line.split()
+        #data = line.split()
 
         # Check the correct event
-        if data[3].strip(':') != "sched_update_nr_running":
+        match = reg_exp.findall(line)
+        if len(match) != 1:
             continue
 
-        point_time = float(data[2].strip(':'))
-        cpu = int(data[4].split('=')[1])
-        value = int(data[5].split('=')[1])
+        pid = int(match[0][0])
+        point_time = float(match[0][1])
+        cpu = int(match[0][2])
+        value = int(match[0][3])
+        if pid == 0:
+            if value > 0:
+                value -= 1
 
         row = np.copy(last_row)
         row[cpu] = value
