@@ -34,7 +34,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
 from matplotlib.ticker import MultipleLocator
 
-def draw_report(time_axis, map_values, differences, imbalances, image_file=None, numa_cpus={}):
+def draw_report(time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus={}):
     # Transpose heat map data to right axes
     map_values = np.array(map_values)[:-1, :].transpose()
 
@@ -52,42 +52,51 @@ def draw_report(time_axis, map_values, differences, imbalances, image_file=None,
     boundaries = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = BoundaryNorm(boundaries, cmap.N, clip=True)
 
-    fig = plt.figure(figsize=(20, 10))
-    ax = plt.gca()
+    fig, axs = plt.subplots(nrows=3, ncols=1, gridspec_kw=dict(height_ratios=[4, 1, 1]),
+                            sharex=True, figsize=(20, 10))  # , constrained_layout=True)
+    fig.subplots_adjust(hspace=0)
 
     # Draw the main heat map
     x_grid, y_grid = np.meshgrid(time_axis, range(len(map_values)))
-    mesh = ax.pcolormesh(x_grid, y_grid, map_values, vmin=0, vmax=4, cmap=cmap, norm=norm)
+    mesh = axs[0].pcolormesh(x_grid, y_grid, map_values, vmin=0, vmax=4, cmap=cmap, norm=norm)
+
+    axs[0].set_xlim(time_axis[0], time_axis[-1])
+    axs[0].set_ylim([0, map_values.shape[0] - 1])
+
+    # Create colorbar
+    cbar = fig.colorbar(mesh, cax=plt.axes([0.95, 0.05, 0.02, 0.9]),
+                        extend='max', ticks=range(5))
+    cbar.ax.set_yticklabels(['0', '1', '2', '3', '4+'])
+    plt.subplots_adjust(bottom=0.05, right=0.9, top=0.95, left=0.05)
 
     # Draw line with differences
-    ax.step(time_axis, differences, where='post', color='white', alpha=0.5)
+    axs[1].step(time_axis, differences, where='post', color='black', alpha=0.8)
 
     # Draw imbalances
     for i in imbalances:
-        ax.plot(i[0][0], i[0][1], 'rx')
+        axs[1].plot(i[0][0], i[0][1], 'rx')
     lc = mc.LineCollection(imbalances,
                            colors=np.tile((1, 0, 0, 1), (len(imbalances), 1)),
                            linewidths=2)
-    ax.add_collection(lc)
+    axs[1].add_collection(lc)
 
-    plt.ylabel("CPUs")
-    plt.xlabel("Timestamp (seconds)")
+    # Draw line with differences
+    axs[2].step(time_axis, sums, where='post', color='black', alpha=0.8)
+
+    axs[0].set_ylabel("CPUs")
+    axs[1].set_ylabel("Max difference")
+    axs[2].set_ylabel("Sum of tasks")
+    axs[1].set_xlabel("Timestamp (seconds)")
 
     # Separate CPUs with lines by NUMA nodes
     if numa_cpus:
-        ax.grid(True, which='major', axis='y', linestyle='--', color='k')
+        axs[0].grid(True, which='major', axis='y', linestyle='--', color='k')
+        axs[0].yaxis.set_minor_locator(MultipleLocator(1))
+        plt.sca(axs[0])
         plt.yticks(range(0, map_values.shape[0] - 1, len(numa_cpus[0])),
                    map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
-        ax.yaxis.set_minor_locator(MultipleLocator(1))
     else:
-        plt.yticks(range(map_values.shape[0] - 1))
-    ax.set_ylim([0, map_values.shape[0] - 1])
-
-    plt.subplots_adjust(left=0.05, right=0.90, top=0.95, bottom=0.1)
-
-    cbar = fig.colorbar(mesh, cax=plt.axes((0.95, 0.1, 0.02, 0.85)), extend='max',
-                        ticks=range(5))
-    cbar.ax.set_yticklabels(['0', '1', '2', '3', '4+'])  # vertically oriented colorbar
+        axs[0].set_yticks(range(map_values.shape[0] - 1))
 
     if image_file:
         plt.savefig(image_file)
@@ -125,6 +134,7 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
     map_values = []
     differences = []
     imbalances = []
+    sums = []
     counter = 0
 
     cpus_count = int(input_file.readline().split('=')[1])
@@ -177,6 +187,7 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
             counter = 0
             map_values.append(row)
             differences.append(diff)
+            sums.append(sum(row))
             time_axis.append(point_time)
         last_row = row
 
@@ -194,7 +205,7 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
     if not imbalances:
         print("No imbalance found")
 
-    draw_report(time_axis, map_values, differences, imbalances, image_file, numa_cpus)
+    draw_report(time_axis, map_values, differences, imbalances, sums, image_file, numa_cpus)
     return time_axis, map_values, differences, imbalances
 
 
