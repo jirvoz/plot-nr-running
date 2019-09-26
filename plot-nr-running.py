@@ -174,11 +174,8 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
             if (point_time - last_imbalance_start) >= duration:
                 imbalances.append([(last_imbalance_start, threshold),
                                     (point_time, threshold)])
-                print("Imbalance from timestamp " \
-                      + str(last_imbalance_start) \
-                      + " lasting " \
-                      + str(point_time - last_imbalance_start) \
-                      + " seconds")
+                print(f"Imbalance from timestamp {last_imbalance_start}"
+                f" lasting {point_time - last_imbalance_start} seconds")
             last_imbalance_start = 0
 
         # Store plotting data with optional sampling
@@ -196,11 +193,8 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
        and (point_time - last_imbalance_start) >= duration:
         imbalances.append([(last_imbalance_start, threshold),
                             (point_time, threshold)])
-        print("Imbalance from timestamp " \
-                + str(last_imbalance_start) \
-                + " lasting " \
-                + str(point_time - last_imbalance_start) \
-                + " seconds")
+        print(f"Imbalance from timestamp {last_imbalance_start}"
+        f" lasting {point_time - last_imbalance_start} seconds")
 
     if not imbalances:
         print("No imbalance found")
