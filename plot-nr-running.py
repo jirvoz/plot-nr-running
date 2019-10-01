@@ -52,7 +52,7 @@ def draw_report(time_axis, map_values, differences, imbalances, sums, image_file
     boundaries = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = BoundaryNorm(boundaries, cmap.N, clip=True)
 
-    fig, axs = plt.subplots(nrows=3, ncols=1, gridspec_kw=dict(height_ratios=[4, 1, 1]),
+    fig, axs = plt.subplots(nrows=3, ncols=1, gridspec_kw=dict(height_ratios=[4, 1, 2]),
                             sharex=True, figsize=(20, 10))  # , constrained_layout=True)
     fig.subplots_adjust(hspace=0)
 
@@ -80,7 +80,7 @@ def draw_report(time_axis, map_values, differences, imbalances, sums, image_file
                            linewidths=2)
     axs[1].add_collection(lc)
 
-    # Draw line with differences
+    # Draw line with sums
     axs[2].step(time_axis, sums, where='post', color='black', alpha=0.8)
 
     axs[0].set_ylabel("CPUs")
