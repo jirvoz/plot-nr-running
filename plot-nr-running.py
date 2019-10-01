@@ -144,12 +144,21 @@ def process_report(input_file, sampling, threshold, duration, ebpf_file=False, i
     sums = []
     counter = 0
 
-    cpus_count = int(input_file.readline().split('=')[1])
+    if ebpf_file:
+        if numa_cpus:
+            cpus_count = max(numa_cpus[max(numa_cpus.keys())]) + 1
+        else:
+            print("lscpu file is needed for eBPF input")
+            exit(1)
+    else:
+        cpus_count = int(input_file.readline().split('=')[1])
+
     last_row = np.zeros(cpus_count)
     map_values.append(last_row)
 
     last_imbalance_start = 0
     point_time = 0
+
     if ebpf_file:
         reg_exp=re.compile(r"^.*-([0-9]+).*\[([0-9]+)\] ([0-9]+): sched_nr_running: nr_running=([0-9]+)$")
     else:
@@ -227,7 +236,8 @@ if __name__ == '__main__':
     parser.add_argument("--duration", default=0.05, type=float,
                         help="Minimal duration of imbalance worth reporting")
     parser.add_argument('--ebpf', action='store_true',
-                        help='Expect output from eBPF script instad of trace-cmd')
+                        help='Expect output from eBPF script instad of trace-cmd'
+                        ' (requires lscpu file)')
     parser.add_argument("--image-file", type=str, default=None,
                         help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
