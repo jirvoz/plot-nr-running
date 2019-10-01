@@ -128,7 +128,7 @@ def read_nodes(lscpu_file):
     return numa_cpus
 
 
-def process_report(input_file, sampling, threshold, duration, image_file=None, numa_cpus={}):
+def process_report(input_file, sampling, threshold, duration, ebpf_file=False, image_file=None, numa_cpus={}):
     cpus_count = 0
     time_axis = []
     map_values = []
@@ -143,18 +143,25 @@ def process_report(input_file, sampling, threshold, duration, image_file=None, n
 
     last_imbalance_start = 0
     point_time = 0
-    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) nr_running=(\d+)")
+    if ebpf_file:
+        reg_exp=re.compile(r"^.*-([0-9]+).*\[([0-9]+)\] ([0-9]+): sched_nr_running: nr_running=([0-9]+)$")
+    else:
+        reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) nr_running=(\d+)")
+
     for line in input_file:
-        #data = line.split()
+        match = reg_exp.findall(line)
 
         # Check the correct event
-        match = reg_exp.findall(line)
         if len(match) != 1:
             continue
 
         pid = int(match[0][0])
-        point_time = float(match[0][1])
-        cpu = int(match[0][2])
+        if ebpf_file:
+            point_time = float(match[0][2]) / 1000000000.0
+            cpu = int(match[0][1])
+        else:
+            point_time = float(match[0][1])
+            cpu = int(match[0][2])
         value = int(match[0][3])
         if pid == 0:
             if value > 0:
@@ -212,6 +219,8 @@ if __name__ == '__main__':
                         help="Minimal difference of process count considered as imbalance")
     parser.add_argument("--duration", default=0.05, type=float,
                         help="Minimal duration of imbalance worth reporting")
+    parser.add_argument('--ebpf', action='store_true',
+                        help='Expect output from eBPF script instad of trace-cmd')
     parser.add_argument("--image-file", type=str, default=None,
                         help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
@@ -226,4 +235,4 @@ if __name__ == '__main__':
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    process_report(args.input_file, args.sampling, args.threshold, args.duration, args.image_file, numa_cpus)
+    process_report(args.input_file, args.sampling, args.threshold, args.duration, args.ebpf, args.image_file, numa_cpus)
