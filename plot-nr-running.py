@@ -48,13 +48,13 @@ def draw_report(time_axis, map_values, differences, imbalances, sums, image_file
     # Add blank row to correctly plot all rows with data
     map_values = np.vstack((map_values, np.zeros(map_values.shape[1])))
 
-    cmap = ListedColormap(['#300040', '#305090', '#40b080', '#f0e020', '#f04010'])
+    cmap = ListedColormap(['#000000', '#305090', '#40b080', '#f0e020', '#f04010'])
     boundaries = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = BoundaryNorm(boundaries, cmap.N, clip=True)
 
     fig, axs = plt.subplots(nrows=3, ncols=1, gridspec_kw=dict(height_ratios=[4, 1, 2]),
                             sharex=True, figsize=(20, 10))  # , constrained_layout=True)
-    fig.subplots_adjust(hspace=0)
+    fig.subplots_adjust(hspace=0.05)
 
     # Draw the main heat map
     x_grid, y_grid = np.meshgrid(time_axis, range(len(map_values)))
@@ -86,17 +86,24 @@ def draw_report(time_axis, map_values, differences, imbalances, sums, image_file
     axs[0].set_ylabel("CPUs")
     axs[1].set_ylabel("Max difference")
     axs[2].set_ylabel("Sum of tasks")
-    axs[1].set_xlabel("Timestamp (seconds)")
+    axs[2].set_xlabel("Timestamp (seconds)")
+
+    axs[1].set_ylim(ymin=0)
+    axs[1].grid()
+    axs[2].set_ylim(ymin=0)
+    axs[2].grid()
 
     # Separate CPUs with lines by NUMA nodes
     if numa_cpus:
-        axs[0].grid(True, which='major', axis='y', linestyle='--', color='k')
+        axs[0].grid(True, which='major', axis='y', linestyle='--', color='w')
         axs[0].yaxis.set_minor_locator(MultipleLocator(1))
         plt.sca(axs[0])
         plt.yticks(range(0, map_values.shape[0] - 1, len(numa_cpus[0])),
                    map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
     else:
         axs[0].set_yticks(range(map_values.shape[0] - 1))
+
+    #plt.tight_layout() - It does not work with mash graphs
 
     if image_file:
         plt.savefig(image_file)
