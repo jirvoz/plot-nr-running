@@ -34,7 +34,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
 from matplotlib.ticker import MultipleLocator
 
-def draw_report(time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus={}):
+def draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus={}):
     # Transpose heat map data to right axes
     map_values = np.array(map_values)[:-1, :].transpose()
 
@@ -103,6 +103,7 @@ def draw_report(time_axis, map_values, differences, imbalances, sums, image_file
     else:
         axs[0].set_yticks(range(map_values.shape[0] - 1))
 
+    plt.title(title)
     #plt.tight_layout() - It does not work with mash graphs
 
     if image_file:
@@ -135,7 +136,7 @@ def read_nodes(lscpu_file):
     return numa_cpus
 
 
-def process_report(input_file, sampling, threshold, duration, ebpf_file=False, image_file=None, numa_cpus={}):
+def process_report(title, input_file, sampling, threshold, duration, ebpf_file=False, image_file=None, numa_cpus={}):
     cpus_count = 0
     time_axis = []
     map_values = []
@@ -222,7 +223,7 @@ def process_report(input_file, sampling, threshold, duration, ebpf_file=False, i
     if not imbalances:
         print("No imbalance found")
 
-    draw_report(time_axis, map_values, differences, imbalances, sums, image_file, numa_cpus)
+    draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file, numa_cpus)
     return time_axis, map_values, differences, imbalances
 
 
@@ -242,6 +243,8 @@ if __name__ == '__main__':
                         help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
                         help="File with output of lscpu from observed machine")
+    parser.add_argument("--name", type=str, default=None,
+                        help="Filename to be displayed in graph. Usefull when reading input from stdin.")
 
     try:
         args = parser.parse_args()
@@ -252,4 +255,10 @@ if __name__ == '__main__':
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    process_report(args.input_file, args.sampling, args.threshold, args.duration, args.ebpf, args.image_file, numa_cpus)
+    method = "eBPF" if args.ebpf else "trace-cmd"
+
+    if args.name:
+        title = "Plot of '" + args.name + "' produced with " + method
+
+
+    process_report(title, args.input_file, args.sampling, args.threshold, args.duration, args.ebpf, args.image_file, numa_cpus)

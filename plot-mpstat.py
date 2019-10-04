@@ -15,7 +15,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
 from matplotlib.ticker import MultipleLocator
 
-def draw_report(map_values, time_axis, image_file=None, numa_cpus={}):
+def draw_report(map_values, time_axis, input_file, image_file=None, numa_cpus={}):
     # Transpose heat map data to right axes
     map_values = np.array(map_values)[:-1, :].transpose()
 
@@ -41,8 +41,9 @@ def draw_report(map_values, time_axis, image_file=None, numa_cpus={}):
     ax.set_xlim(time_axis[0], time_axis[-1])
     ax.set_ylim([0, map_values.shape[0] - 1])
 
-    plt.ylabel("CPUs")
-    plt.xlabel("Record index")
+    plt.title("mpstat heatmap for file '" + str(input_file.name) + "'")
+    plt.ylabel("CPUs (grouped by NUMA nodes)")
+    plt.xlabel("Uptime in seconds")
 
     # Separate CPUs with lines by NUMA nodes
     if numa_cpus:
@@ -95,14 +96,39 @@ def process_report(input_file, image_file=None, numa_cpus={}):
     imbalances = []
     counter = 0
 
-    start_date = datetime.fromtimestamp(float(input_file.readline()) / 1000.0)
-    uptime = float(input_file.readline().split()[0])
+    # Check if two first lines contain date and uptime timestamps in this format:
+#Date since epoch in seconds:1570106259.365
+#Uptime in seconds:105323.01
+    # Related BASH code    
+    # DATE_MILI=$(date +%s%3N); UPTIME=$(cat /proc/uptime)
+    # DATE_SECONDS=$(bc -l <<< "scale=3;$DATE_MILI/10^3")
+    # UPTIME_ONLY=$(echo ${UPTIME} | awk '{print $1}')
+    # { echo "#Date since epoch in seconds:${DATE_SECONDS}"; echo "#Uptime in seconds:${UPTIME_ONLY}"; } > ${BASENAME_LOGFILE}.mpstat
+
+    start_date=None
+    uptime=None
+
+    line = input_file.readline()
+    m = re.search(r"#Date since epoch in seconds:([0-9]+.[0-9]+)", line)
+    if m:
+        start_date = datetime.fromtimestamp(float(m.group(1)))
+        line = input_file.readline()
+    else:
+        print("Missing date")
+
+    m = re.search(r"#Uptime in seconds:([0-9]+.[0-9]+)", line)
+    if m:
+        uptime = float(m.group(1))
+        line = input_file.readline()
+    else:
+        print("Missing uptime")
+
     act_date = start_date.date()
     start_time = start_date.timestamp() - uptime
 
     # Get CPUs count
     reg_exp=re.compile(r".*\(([0-9]+) CPU\).*")
-    match = reg_exp.findall(input_file.readline())
+    match = reg_exp.findall(line)
     if match:
         cpus_count = int(match[0])
     else:
@@ -132,7 +158,7 @@ def process_report(input_file, image_file=None, numa_cpus={}):
             continue
         row[int(data[1])] = float(data[2]) + float(data[4])  # usr + sys values
 
-    draw_report(map_values, time_axis, image_file, numa_cpus)
+    draw_report(map_values, time_axis, input_file, image_file, numa_cpus)
 
 
 if __name__ == '__main__':
