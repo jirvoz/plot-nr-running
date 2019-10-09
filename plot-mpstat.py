@@ -88,56 +88,36 @@ def read_nodes(lscpu_file):
     return numa_cpus
 
 
-def process_report(input_file, image_file=None, numa_cpus={}):
+def process_report(input_file, time_offset=0.0, image_file=None, numa_cpus={}):
     cpus_count = 0
     time_axis = []
     map_values = []
     differences = []
     imbalances = []
-    counter = 0
 
-    # Check if two first lines contain date and uptime timestamps in this format:
-#Date since epoch in seconds:1570106259.365
-#Uptime in seconds:105323.01
-    # Related BASH code    
-    # DATE_MILI=$(date +%s%3N); UPTIME=$(cat /proc/uptime)
-    # DATE_SECONDS=$(bc -l <<< "scale=3;$DATE_MILI/10^3")
-    # UPTIME_ONLY=$(echo ${UPTIME} | awk '{print $1}')
-    # { echo "#Date since epoch in seconds:${DATE_SECONDS}"; echo "#Uptime in seconds:${UPTIME_ONLY}"; } > ${BASENAME_LOGFILE}.mpstat
+    # Get CPUs count and start date
+    reg_exp=re.compile(r".*\)\s+(\d+/\d+/\d+)\s+_.*\((\d+) CPU\).*")
 
-    start_date=None
-    uptime=None
-
-    line = input_file.readline()
-    m = re.search(r"#Date since epoch in seconds:([0-9]+.[0-9]+)", line)
-    if m:
-        start_date = datetime.fromtimestamp(float(m.group(1)))
-        line = input_file.readline()
-    else:
-        print("Missing date")
-
-    m = re.search(r"#Uptime in seconds:([0-9]+.[0-9]+)", line)
-    if m:
-        uptime = float(m.group(1))
-        line = input_file.readline()
-    else:
-        print("Missing uptime")
-
-    act_date = start_date.date()
-    start_time = start_date.timestamp() - uptime
-
-    # Get CPUs count
-    reg_exp=re.compile(r".*\(([0-9]+) CPU\).*")
+    line = input_file.readline()  # read first data line
     match = reg_exp.findall(line)
-    if match:
-        cpus_count = int(match[0])
-    else:
-        print("Expected mpstat header on third line")
+    if not match:
+        print("Wrong mpstat header")
         exit(1)
 
-    input_file.readline()  # skip first empty line
+    start_date = datetime.strptime(match[0][0], "%m/%d/%y").date()
+    cpus_count = int(match[0][1])
 
-    curr_time = uptime
+    input_file.readline()  # skip first empty line
+    data = input_file.readline().split()  # read first data line
+
+    if time_offset:
+        curr_time = datetime.combine(start_date,
+            datetime.strptime(data[0], "%H:%M:%S").time()).timestamp() - time_offset
+    else:
+        time_offset = datetime.combine(start_date,
+            datetime.strptime(data[0], "%H:%M:%S").time()).timestamp()
+        curr_time = 0
+
     time_axis = []
     row = np.zeros(cpus_count)
 
@@ -145,14 +125,18 @@ def process_report(input_file, image_file=None, numa_cpus={}):
         data = line.split()
         if not data:
             map_values.append(row)
-            time_axis.append(curr_time - start_time)
+            time_axis.append(curr_time)
             row = np.zeros(cpus_count)
             continue
         if data[0] == "Average:":
             break  # end of file
         if data[1] == "CPU":  # Time when measure started
-            curr_time = datetime.combine(act_date,
-                                         datetime.strptime(data[0], "%H:%M:%S").time()).timestamp()
+            last_time = curr_time
+            curr_time = datetime.combine(start_date,
+                datetime.strptime(data[0], "%H:%M:%S").time()).timestamp() - time_offset
+            # if curr_time.hours < last_time.hours:
+            #     start_date += timedelta(days=1)
+            #     curr_time += timedelta(days=1)
             continue
         if data[1] == "all":
             continue
@@ -162,12 +146,15 @@ def process_report(input_file, image_file=None, numa_cpus={}):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="")
+    parser = argparse.ArgumentParser(description="Create heatmap from mpstat data"
+        " with optional alignment to system uptime and reordering by NUMA nodes.")
     parser.add_argument("input_file", nargs="?", type=argparse.FileType('r'), default=sys.stdin)
     parser.add_argument("--image-file", type=str, default=None,
                         help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
                         help="File with output of lscpu from observed machine")
+    parser.add_argument("--time-offset", type=float, default=0,
+                        help="Timestamp of system's boot to align time axis to uptime")
 
     try:
         args = parser.parse_args()
@@ -178,4 +165,4 @@ if __name__ == '__main__':
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    process_report(args.input_file, args.image_file, numa_cpus)
+    process_report(args.input_file, args.time_offset, args.image_file, numa_cpus)
