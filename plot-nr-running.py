@@ -94,17 +94,16 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     axs[2].grid()
 
     # Separate CPUs with lines by NUMA nodes
+    plt.sca(axs[0])
     if numa_cpus:
         axs[0].grid(True, which='major', axis='y', linestyle='--', color='w')
         axs[0].yaxis.set_minor_locator(MultipleLocator(1))
-        plt.sca(axs[0])
         plt.yticks(range(0, map_values.shape[0] - 1, len(numa_cpus[0])),
                    map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
     else:
         axs[0].set_yticks(range(map_values.shape[0] - 1))
 
     plt.title(title)
-    #plt.tight_layout() - It does not work with mash graphs
 
     if image_file:
         plt.savefig(image_file)
@@ -174,7 +173,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
 
         pid = int(match[0][0])
         if ebpf_file:
-            point_time = float(match[0][2]) / 1000000000.0
+            point_time = float(match[0][2]) / 1_000_000_000.0
             cpu = int(match[0][1])
         else:
             point_time = float(match[0][1])
@@ -228,7 +227,8 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="")
+    parser = argparse.ArgumentParser(description="Create heatmap and find"
+        " imbalances from recorded sched_update_nr_running events with trace-cmd.")
     parser.add_argument("input_file", nargs="?", type=argparse.FileType('r'), default=sys.stdin)
     parser.add_argument("--sampling", default=1, type=int,
                         help="Sampling of plotted data to reduce drawing point_time")
@@ -259,6 +259,15 @@ if __name__ == '__main__':
 
     if args.name:
         title = "Plot of '" + args.name + "' produced with " + method
+    else:
+        title = "Plot of '" + args.input_file.name + "' produced with " + method
 
-
-    process_report(title, args.input_file, args.sampling, args.threshold, args.duration, args.ebpf, args.image_file, numa_cpus)
+    if args.input_file.name.endswith(".xz"):
+        args.input_file.close()
+        import lzma
+        with lzma.open(args.input_file.name, 'rt') as decompressed:
+            process_report(title, decompressed, args.sampling, args.threshold,
+                           args.duration, args.ebpf, args.image_file, numa_cpus)
+    else:
+        process_report(title, args.input_file, args.sampling, args.threshold,
+                       args.duration, args.ebpf, args.image_file, numa_cpus)
