@@ -162,7 +162,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
     if ebpf_file:
         reg_exp=re.compile(r"^.*-([0-9]+).*\[([0-9]+)\] ([0-9]+): sched_nr_running: nr_running=([0-9]+)$")
     else:
-        reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) nr_running=(\d+)")
+        reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
 
     for line in input_file:
         match = reg_exp.findall(line)
