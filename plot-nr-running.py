@@ -27,8 +27,8 @@ import sys
 import re
 
 import numpy as np
-# import matplotlib
-# matplotlib.use('agg')  # In case of missing tkinter
+import matplotlib
+matplotlib.use('agg')  # Make it work also on machines without tkinter
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
