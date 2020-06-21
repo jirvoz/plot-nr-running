@@ -1,0 +1,60 @@
+#!/bin/bash
+
+LANG=C
+
+function usage_msg() {
+  printf "Usage: %s: --lscpu=LSCPU_FILE TRACE_FILE ... [TRACE_FILE] ...\n\n" "$0"
+  printf "Process kernel trace reports with sched_update_nr_running events.\n"
+  printf "Example:\n%s --lscpu=lscpu.txt *trace.xz\n" "$0"
+  printf " TRACE_FILE [TRACE_FILE]- kernel trace files with sched_update_nr_running events (mandatory)\n"
+  printf " --lscpu=LSCPU_FILE     - lscpu file (generated with 'lscpu' command on server where kernel tracing was done\n"
+  printf " --dry                  - dry run.\n"
+  exit 1
+}
+
+if [ "$#" -lt "2" ]; then
+    usage_msg
+fi
+
+argDry=0;
+argLscpu=""
+ARGLIST=$(getopt -o 'h' --long 'lscpu:,dry,help' -n "$0" -- "$@") || usage_msg
+eval set -- "${ARGLIST}"
+while true
+do
+  case "$1" in
+  --lscpu)      shift; argLscpu=$1;;
+  --dry)        argDry=1;;
+  -h|--help)    usage_msg;;
+  --)           shift; break;;
+  *)            usage_msg;;
+  esac
+  shift
+done
+
+[[ -z "$argLscpu" ]] && { echo "lscpu=LSCPU_FILE is mandatory"; usage_msg; }
+[[ -z "$1" ]] && { echo "No kernel trace files to process provided."; usage_msg; }
+
+SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+
+for file in "$@"; do
+  out_file="${file%.*}.png"
+  echo "Processing file '$file', output in '${out_file}'"
+  COMMAND=("${SCRIPT_DIR}/plot-nr-running.py" "--lscpu-file" "$argLscpu" "--image-file" "$out_file" "$file")
+  
+  if [[ "$argDry" == "1" ]]; then
+    printf "%s\n" "${COMMAND[*]}"
+    continue
+  fi
+
+  eval "${COMMAND[@]}"
+  ret_code=$?
+
+  if [[ "$ret_code" -ne 0 ]]; then
+    echo "Failed to process ${file}. The command was:"
+    printf "%s\n" "${COMMAND[*]}"
+  fi
+done
+
+
+
