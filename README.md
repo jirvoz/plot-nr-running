@@ -41,6 +41,6 @@ Other optional arguments can be viewed using `--help` arguments:
 
 ## Example
 ```bash
-./plot-nr-running.py example/example.trace --lscpu-file example/example-lscpu.txt
+./plot-nr-running.py --lscpu-file example/lscpu.txt --image-file NAS_48_threads_group_imbalance_bug.png NAS_48_threads_group_imbalance_bug.trace.xz
 ```
-![Example report](example/example.png)
+![Example report](example/NAS_48_threads_group_imbalance_bug.png)
