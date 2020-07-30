@@ -48,11 +48,12 @@ if [[ "$argParallel" == "0" ]]; then
     COMMAND=("${SCRIPT_DIR}/plot-nr-running.py" "--lscpu-file" "$argLscpu" "--image-file" "$out_file" "$file")
     
     if [[ "$argDry" == "1" ]]; then
-      printf "%s\n" "${COMMAND[*]}"
+      printf "'%s' " "${COMMAND[@]}"
+      echo
       continue
     fi
 
-    eval "${COMMAND[@]}"
+    "${COMMAND[@]}"
     ret_code=$?
 
     if [[ "$ret_code" -ne 0 ]]; then
@@ -64,9 +65,10 @@ if [[ "$argParallel" == "0" ]]; then
 else
   command -v "parallel" >/dev/null 2>&1 || { echo >&2 "GNU parallel is required, but it's not installed."; exit 1; }
   [[ "$argDry" == "1" ]] && parDry=("--dry-run") || parDry=()
-  COMMAND=("parallel" ${parDry[@]} "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ":::" $@)
-  printf "%s\n" "${COMMAND[*]}"
-  eval "${COMMAND[@]}"
+  COMMAND=("parallel" "${parDry[@]}" "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ":::" "$@")
+  printf "'%s' " "${COMMAND[@]}"
+  echo
+  "${COMMAND[@]}"
 fi
 
 
