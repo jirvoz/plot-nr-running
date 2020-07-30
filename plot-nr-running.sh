@@ -9,6 +9,7 @@ function usage_msg() {
   printf " TRACE_FILE [TRACE_FILE]- kernel trace files with sched_update_nr_running events (mandatory)\n"
   printf " --lscpu=LSCPU_FILE     - lscpu file (generated with 'lscpu' command on server where kernel tracing was done\n"
   printf " --dry                  - dry run.\n"
+  printf " --parallel             - Use GNU parallel to start parallel processing (one job per one input file)\n"
   exit 1
 }
 
@@ -18,13 +19,15 @@ fi
 
 argDry=0;
 argLscpu=""
-ARGLIST=$(getopt -o 'h' --long 'lscpu:,dry,help' -n "$0" -- "$@") || usage_msg
+argParallel=0
+ARGLIST=$(getopt -o 'h' --long 'lscpu:,dry,parallel,help' -n "$0" -- "$@") || usage_msg
 eval set -- "${ARGLIST}"
 while true
 do
   case "$1" in
   --lscpu)      shift; argLscpu=$1;;
   --dry)        argDry=1;;
+  --parallel)   argParallel=1;;
   -h|--help)    usage_msg;;
   --)           shift; break;;
   *)            usage_msg;;
@@ -37,24 +40,34 @@ done
 
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
 
-for file in "$@"; do
-  out_file="${file%.*}.png"
-  echo "Processing file '$file', output in '${out_file}'"
-  COMMAND=("${SCRIPT_DIR}/plot-nr-running.py" "--lscpu-file" "$argLscpu" "--image-file" "$out_file" "$file")
-  
-  if [[ "$argDry" == "1" ]]; then
-    printf "%s\n" "${COMMAND[*]}"
-    continue
-  fi
+if [[ "$argParallel" == "0" ]]; then
 
+  for file in "$@"; do
+    out_file="${file%.*}.png"
+    echo "Processing file '$file', output in '${out_file}'"
+    COMMAND=("${SCRIPT_DIR}/plot-nr-running.py" "--lscpu-file" "$argLscpu" "--image-file" "$out_file" "$file")
+    
+    if [[ "$argDry" == "1" ]]; then
+      printf "%s\n" "${COMMAND[*]}"
+      continue
+    fi
+
+    eval "${COMMAND[@]}"
+    ret_code=$?
+
+    if [[ "$ret_code" -ne 0 ]]; then
+      echo "Failed to process ${file}. The command was:"
+      printf "%s\n" "${COMMAND[*]}"
+    fi
+  done
+
+else
+  command -v "parallel" >/dev/null 2>&1 || { echo >&2 "GNU parallel is required, but it's not installed."; exit 1; }
+  [[ "$argDry" == "1" ]] && parDry=("--dry-run") || parDry=()
+  COMMAND=("parallel" ${parDry[@]} "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ":::" $@)
+  printf "%s\n" "${COMMAND[*]}"
   eval "${COMMAND[@]}"
-  ret_code=$?
-
-  if [[ "$ret_code" -ne 0 ]]; then
-    echo "Failed to process ${file}. The command was:"
-    printf "%s\n" "${COMMAND[*]}"
-  fi
-done
+fi
 
 
 
