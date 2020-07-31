@@ -65,7 +65,7 @@ if [[ "$argParallel" == "0" ]]; then
 else
   command -v "parallel" >/dev/null 2>&1 || { echo >&2 "GNU parallel is required, but it's not installed."; exit 1; }
   [[ "$argDry" == "1" ]] && parDry=("--dry-run") || parDry=()
-  COMMAND=("parallel" "${parDry[@]}" "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ":::" "$@")
+  COMMAND=("parallel" "${parDry[@]}" "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ">" "{.}.log" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
   "${COMMAND[@]}"
