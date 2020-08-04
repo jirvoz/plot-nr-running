@@ -55,15 +55,15 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
     boundaries = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
     norm = BoundaryNorm(boundaries, cmap.N, clip=True)
 
-    fig, axs = plt.subplots(nrows=6, ncols=1, gridspec_kw=dict(height_ratios=[4, 4, 1, 1, 2, 2]),
-                            figsize=(20, 15))  # sharex=True, , constrained_layout=True)
-    #fig.subplots_adjust(hspace=0.1)
+    fig, axs = plt.subplots(nrows=4, ncols=1, gridspec_kw=dict(height_ratios=[4, 4, 1, 2]),
+                            figsize=(20, 15), sharex=True) # , constrained_layout=True)
+    fig.subplots_adjust(hspace=0.1)
 
     # Draw the main heat map
     x_grid0, y_grid0 = np.meshgrid(time_axis0, range(len(map_values0)))
     mesh0 = axs[0].pcolormesh(x_grid0, y_grid0, map_values0, vmin=0, vmax=4, cmap=cmap, norm=norm)
 
-    axs[0].set_xlim(time_axis0[0], time_axis0[-1])
+    axs[0].set_xlim(min(time_axis0[0], time_axis1[0]), max(time_axis0[-1], time_axis1[-1]))
     axs[0].set_ylim([0, map_values0.shape[0] - 1])
 
     cmap1 = ListedColormap(['#000000', '#305090', '#40b080', '#f0e020', '#f04010'])
@@ -72,7 +72,7 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
     x_grid1, y_grid1 = np.meshgrid(time_axis1, range(len(map_values1)))
     mesh1 = axs[1].pcolormesh(x_grid1, y_grid1, map_values1, vmin=0, vmax=4, cmap=cmap1, norm=norm1)
 
-    axs[1].set_xlim(time_axis1[0], time_axis1[-1])
+    axs[1].set_xlim(min(time_axis0[0], time_axis1[0]), max(time_axis0[-1], time_axis1[-1]))
     axs[1].set_ylim([0, map_values1.shape[0] - 1])
 
     # Create colorbar
@@ -82,8 +82,8 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
     plt.subplots_adjust(bottom=0.05, right=0.9, top=0.95, left=0.05)
 
     # Draw line with differences
-    axs[2].step(time_axis0, differences0, where='post', color='black', alpha=0.8)
-    axs[3].step(time_axis1, differences1, where='post', color='black', alpha=0.8)
+    axs[2].step(time_axis0, differences0, where='post', color='green', alpha=0.8)
+    axs[2].step(time_axis1, differences1, where='post', color='blue', alpha=0.8)
 
     # Draw imbalances
     for i in imbalances0:
@@ -93,37 +93,28 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
                            linewidths=2)
     axs[2].add_collection(lc)
     for i in imbalances1:
-        axs[3].plot(i[0][0], i[0][1], 'rx')
+        axs[2].plot(i[0][0], i[0][1], 'rx')
     lc = mc.LineCollection(imbalances1,
                            colors=np.tile((1, 0, 0, 1), (len(imbalances1), 1)),
                            linewidths=2)
-    axs[3].add_collection(lc)
+    axs[2].add_collection(lc)
 
     # Draw line with sums
-    axs[4].step(time_axis0, sums0, where='post', color='black', alpha=0.8)
-    axs[5].step(time_axis1, sums1, where='post', color='black', alpha=0.8)
+    axs[3].step(time_axis0, sums0, where='post', color='green', alpha=0.8)
+    axs[3].step(time_axis1, sums1, where='post', color='blue', alpha=0.8)
 
     axs[0].set_ylabel("CPUs")
     axs[1].set_ylabel("CPUs")
     axs[2].set_ylabel("Max difference")
-    axs[3].set_ylabel("Max difference")
-    axs[4].set_ylabel("Sum of tasks")
-    axs[4].set_xlabel("Timestamp (seconds)")
-    axs[5].set_ylabel("Sum of tasks")
-    axs[5].set_xlabel("Timestamp (seconds)")
+    axs[3].set_ylabel("Sum of tasks")
+    axs[3].set_xlabel("Timestamp (seconds)")
 
     axs[2].set_ylim(ymin=0)
-    axs[2].set_xlim(time_axis0[0], time_axis0[-1])
+    axs[2].set_xlim(min(time_axis0[0], time_axis1[0]), max(time_axis0[-1], time_axis1[-1]))
     axs[2].grid()
     axs[3].set_ylim(ymin=0)
-    axs[3].set_xlim(time_axis1[0], time_axis1[-1])
+    axs[3].set_xlim(min(time_axis0[0], time_axis1[0]), max(time_axis0[-1], time_axis1[-1]))
     axs[3].grid()
-    axs[4].set_ylim(ymin=0)
-    axs[4].set_xlim(time_axis0[0], time_axis0[-1])
-    axs[4].grid()
-    axs[5].set_ylim(ymin=0)
-    axs[5].set_xlim(time_axis1[0], time_axis1[-1])
-    axs[5].grid()
 
     # Separate CPUs with lines by NUMA nodes
     if numa_cpus:
@@ -200,6 +191,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
 
     last_imbalance_start = 0
     point_time = 0
+    start_time = -1
 
     if ebpf_file:
         reg_exp=re.compile(r"^.*-([0-9]+).*\[([0-9]+)\] ([0-9]+): sched_nr_running: nr_running=([0-9]+)$")
@@ -224,6 +216,10 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
         if pid == 0:
             if value > 0:
                 value -= 1
+
+        if start_time < 0:
+            start_time += point_time
+        point_time -= start_time
 
         row = np.copy(last_row)
         row[cpu] = value
