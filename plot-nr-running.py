@@ -28,7 +28,7 @@ import re
 
 import numpy as np
 import matplotlib
-matplotlib.use('agg')  # For machines without tkinter
+#matplotlib.use('agg')  # For machines without tkinter
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
@@ -136,7 +136,7 @@ def read_nodes(lscpu_file):
     return numa_cpus
 
 
-def process_report(title, input_file, sampling, threshold, duration, ebpf_file=False, image_file=None, numa_cpus={}):
+def process_report(title, input_file, sampling, threshold, duration, image_file=None, numa_cpus={}):
     cpus_count = 0
     time_axis = []
     map_values = []
@@ -145,14 +145,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
     sums = []
     counter = 0
 
-    if ebpf_file:
-        if numa_cpus:
-            cpus_count = max(numa_cpus[max(numa_cpus.keys())]) + 1
-        else:
-            print("lscpu file is needed for eBPF input")
-            exit(1)
-    else:
-        cpus_count = int(input_file.readline().split('=')[1])
+    cpus_count = int(input_file.readline().split('=')[1])
 
     last_row = np.zeros(cpus_count)
     map_values.append(last_row)
@@ -160,10 +153,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
     last_imbalance_start = 0
     point_time = 0
 
-    if ebpf_file:
-        reg_exp=re.compile(r"^.*-([0-9]+).*\[([0-9]+)\] ([0-9]+): sched_nr_running: nr_running=([0-9]+)$")
-    else:
-        reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
+    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
 
     for line in input_file:
         match = reg_exp.findall(line)
@@ -173,12 +163,8 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
             continue
 
         pid = int(match[0][0])
-        if ebpf_file:
-            point_time = float(match[0][2]) / 1_000_000_000.0
-            cpu = int(match[0][1])
-        else:
-            point_time = float(match[0][1])
-            cpu = int(match[0][2])
+        point_time = float(match[0][1])
+        cpu = int(match[0][2])
         value = int(match[0][3])
 
         row = np.copy(last_row)
@@ -234,9 +220,6 @@ if __name__ == '__main__':
                         help="Minimal difference of process count considered as imbalance")
     parser.add_argument("--duration", default=0.05, type=float,
                         help="Minimal duration of imbalance worth reporting")
-    parser.add_argument('--ebpf', action='store_true',
-                        help='Expect output from eBPF script instad of trace-cmd'
-                        ' (requires lscpu file)')
     parser.add_argument("--image-file", type=str, default=None,
                         help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
@@ -253,19 +236,17 @@ if __name__ == '__main__':
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    method = "eBPF" if args.ebpf else "trace-cmd"
-
     if args.name:
-        title = "Plot of '" + args.name + "' produced with " + method
+        title = "Plot of '" + args.name
     else:
-        title = "Plot of '" + args.input_file.name + "' produced with " + method
+        title = "Plot of '" + args.input_file.name
 
     if args.input_file.name.endswith(".xz"):
         args.input_file.close()
         import lzma
         with lzma.open(args.input_file.name, 'rt') as decompressed:
             process_report(title, decompressed, args.sampling, args.threshold,
-                           args.duration, args.ebpf, args.image_file, numa_cpus)
+                           args.duration, args.image_file, numa_cpus)
     else:
         process_report(title, args.input_file, args.sampling, args.threshold,
-                       args.duration, args.ebpf, args.image_file, numa_cpus)
+                       args.duration, args.image_file, numa_cpus)
