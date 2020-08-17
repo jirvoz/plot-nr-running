@@ -28,7 +28,7 @@ import re
 
 import numpy as np
 import matplotlib
-matplotlib.use('agg')  # Make it work also on machines without tkinter
+matplotlib.use('agg')  # For machines without tkinter
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
@@ -67,6 +67,7 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     cbar = fig.colorbar(mesh, cax=plt.axes([0.95, 0.05, 0.02, 0.9]),
                         extend='max', ticks=range(5))
     cbar.ax.set_yticklabels(['0', '1', '2', '3', '4+'])
+    cbar.ax.set_ylabel("Number of tasks on CPU core")
     plt.subplots_adjust(bottom=0.05, right=0.9, top=0.95, left=0.05)
 
     # Draw line with differences
@@ -179,9 +180,6 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
             point_time = float(match[0][1])
             cpu = int(match[0][2])
         value = int(match[0][3])
-        if pid == 0:
-            if value > 0:
-                value -= 1
 
         row = np.copy(last_row)
         row[cpu] = value
