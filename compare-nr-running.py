@@ -79,6 +79,7 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
     cbar = fig.colorbar(mesh0, cax=plt.axes([0.95, 0.05, 0.02, 0.9]),
                         extend='max', ticks=range(5))
     cbar.ax.set_yticklabels(['0', '1', '2', '3', '4+'])
+    cbar.ax.set_ylabel("Number of tasks on CPU core")
     plt.subplots_adjust(bottom=0.05, right=0.9, top=0.95, left=0.05)
 
     # Draw line with differences
@@ -168,7 +169,7 @@ def read_nodes(lscpu_file):
     return numa_cpus
 
 
-def process_report(title, input_file, sampling, threshold, duration, ebpf_file=False, image_file=None, numa_cpus={}):
+def process_report(title, input_file, sampling, threshold, duration, image_file=None, numa_cpus={}):
     cpus_count = 0
     time_axis = []
     map_values = []
@@ -177,14 +178,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
     sums = []
     counter = 0
 
-    if ebpf_file:
-        if numa_cpus:
-            cpus_count = max(numa_cpus[max(numa_cpus.keys())]) + 1
-        else:
-            print("lscpu file is needed for eBPF input")
-            exit(1)
-    else:
-        cpus_count = int(input_file.readline().split('=')[1])
+    cpus_count = int(input_file.readline().split('=')[1])
 
     last_row = np.zeros(cpus_count)
     map_values.append(last_row)
@@ -193,10 +187,7 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
     point_time = 0
     start_time = -1
 
-    if ebpf_file:
-        reg_exp=re.compile(r"^.*-([0-9]+).*\[([0-9]+)\] ([0-9]+): sched_nr_running: nr_running=([0-9]+)$")
-    else:
-        reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
+    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
 
     for line in input_file:
         match = reg_exp.findall(line)
@@ -206,16 +197,9 @@ def process_report(title, input_file, sampling, threshold, duration, ebpf_file=F
             continue
 
         pid = int(match[0][0])
-        if ebpf_file:
-            point_time = float(match[0][2]) / 1_000_000_000.0
-            cpu = int(match[0][1])
-        else:
-            point_time = float(match[0][1])
-            cpu = int(match[0][2])
+        point_time = float(match[0][1])
+        cpu = int(match[0][2])
         value = int(match[0][3])
-        if pid == 0:
-            if value > 0:
-                value -= 1
 
         if start_time < 0:
             start_time += point_time
@@ -275,9 +259,6 @@ if __name__ == '__main__':
                         help="Minimal difference of process count considered as imbalance")
     parser.add_argument("--duration", default=0.05, type=float,
                         help="Minimal duration of imbalance worth reporting")
-    parser.add_argument('--ebpf', action='store_true',
-                        help='Expect output from eBPF script instad of trace-cmd'
-                        ' (requires lscpu file)')
     parser.add_argument("--image-file", type=str, default=None,
                         help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
@@ -294,12 +275,11 @@ if __name__ == '__main__':
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    method = "eBPF" if args.ebpf else "trace-cmd"
-
     if args.name:
-        title = "Plot of '" + args.name + "' produced with " + method
+        title = "Plot of '" + args.name
     else:
-        title = "Plot of '" + args.input_file0.name + "' produced with " + method
+        title = "Plot of '" + args.input_file0.name \
+            + " and " + args.input_file1.name
 
     if args.input_file0.name.endswith(".xz"):
         args.input_file0.close()
@@ -307,11 +287,11 @@ if __name__ == '__main__':
         with lzma.open(args.input_file0.name, 'rt') as decompressed:
             time_axis0, map_values0, differences0, imbalances0, sums0 = \
             process_report(title, decompressed, args.sampling, args.threshold,
-                           args.duration, args.ebpf, args.image_file, numa_cpus)
+                           args.duration, args.image_file, numa_cpus)
     else:
         time_axis0, map_values0, differences0, imbalances0, sums0 = \
         process_report(title, args.input_file0, args.sampling, args.threshold,
-                       args.duration, args.ebpf, args.image_file, numa_cpus)
+                       args.duration, args.image_file, numa_cpus)
 
     if args.input_file1.name.endswith(".xz"):
         args.input_file1.close()
@@ -319,10 +299,11 @@ if __name__ == '__main__':
         with lzma.open(args.input_file1.name, 'rt') as decompressed:
             time_axis1, map_values1, differences1, imbalances1, sums1 = \
             process_report(title, decompressed, args.sampling, args.threshold,
-                           args.duration, args.ebpf, args.image_file, numa_cpus)
+                           args.duration, args.image_file, numa_cpus)
     else:
         time_axis1, map_values1, differences1, imbalances1, sums1 = \
         process_report(title, args.input_file1, args.sampling, args.threshold,
-                       args.duration, args.ebpf, args.image_file, numa_cpus)
+                       args.duration, args.image_file, numa_cpus)
 
-    draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0, time_axis1, map_values1, differences1, imbalances1, sums1, args.image_file, numa_cpus)
+    draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0,
+                time_axis1, map_values1, differences1, imbalances1, sums1, args.image_file, numa_cpus)
