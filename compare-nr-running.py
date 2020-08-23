@@ -101,8 +101,10 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
     axs[2].add_collection(lc)
 
     # Draw line with sums
-    axs[3].step(time_axis0, sums0, where='post', color='green', alpha=0.8)
-    axs[3].step(time_axis1, sums1, where='post', color='blue', alpha=0.8)
+    axs[3].step(time_axis0, sums0, where='post', color='green', alpha=0.8,
+                label="Base")
+    axs[3].step(time_axis1, sums1, where='post', color='blue', alpha=0.8,
+                label="Target")
 
     axs[0].set_ylabel("CPUs")
     axs[1].set_ylabel("CPUs")
@@ -116,6 +118,8 @@ def draw_report(title, time_axis0, map_values0, differences0, imbalances0, sums0
     axs[3].set_ylim(ymin=0)
     axs[3].set_xlim(min(time_axis0[0], time_axis1[0]), max(time_axis0[-1], time_axis1[-1]))
     axs[3].grid()
+
+    axs[3].legend(loc="lower right", ncol=2)
 
     # Separate CPUs with lines by NUMA nodes
     if numa_cpus:
