@@ -1,11 +1,27 @@
 #!/bin/bash
 
+#Process kernel trace reports with sched_update_nr_running events.
+#Copyright (C) 2020  Jirka Hladky <hladky DOT jiri AT gmail DOT com>
+#
+#This program is free software: you can redistribute it and/or modify
+#it under the terms of the GNU General Public License as published by
+#the Free Software Foundation, either version 3 of the License, or
+#(at your option) any later version.
+#
+#This program is distributed in the hope that it will be useful,
+#but WITHOUT ANY WARRANTY; without even the implied warranty of
+#MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#GNU General Public License for more details.
+#
+#You should have received a copy of the GNU General Public License
+#along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 LANG=C
 
 function usage_msg() {
   printf "Usage: %s: --lscpu=LSCPU_FILE TRACE_FILE ... [TRACE_FILE] ...\n\n" "$0"
   printf "Process kernel trace reports with sched_update_nr_running events.\n"
-  printf "Example:\n%s --lscpu=lscpu.txt *trace.xz\n" "$0"
+  printf "Example:\n%s --lscpu=lscpu.txt *trace.xz\n\n" "$0"
   printf " TRACE_FILE [TRACE_FILE]- kernel trace files with sched_update_nr_running events (mandatory)\n"
   printf " --lscpu=LSCPU_FILE     - lscpu file (generated with 'lscpu' command on server where kernel tracing was done\n"
   printf " --dry                  - dry run.\n"
@@ -13,6 +29,7 @@ function usage_msg() {
   printf "                          Specify maximum number of parallel jobs. Use 0 to use all available CPUs.\n"
   printf "                          Note: plotting large trace files consumes lots of memory.\n"
   printf "                                Make sure there is enough RAM for parallel processing.\n"
+  printf " -h | --help            - This message\n\n"
   exit 1
 }
 
