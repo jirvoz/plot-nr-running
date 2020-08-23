@@ -159,11 +159,12 @@ if __name__ == '__main__':
                                      " uptime and reordering by NUMA nodes.")
     parser.add_argument("input_file", nargs="?", type=argparse.FileType('r'),
                         default=sys.stdin)
-    parser.add_argument("--image-file", type=str, default=None,
-                        help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'),
                         default=None,
-                        help="File with output of lscpu from observed machine")
+                        help="File with output of lscpu from observed machine"
+                        "(REQUIRED)")
+    parser.add_argument("--image-file", type=str, default=None,
+                        help="Save plotted heatmap to file instead of showing")
     parser.add_argument("--time-offset", type=float, default=0,
                         help="Timestamp of system's boot"
                         " to align time axis to uptime")
@@ -176,6 +177,9 @@ if __name__ == '__main__':
     numa_cpus = {}
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
+    else:
+        print("Argument --lscpu-file is required.")
+        sys.exit(1)
 
     process_report(args.input_file, args.time_offset,
                    args.image_file, numa_cpus)
