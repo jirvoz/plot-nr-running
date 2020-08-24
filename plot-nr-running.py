@@ -168,7 +168,7 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         pid = int(match[0][0])
         point_time = float(match[0][1])
         cpu = int(match[0][2])
-        change = int(match[0][2])
+        change = int(match[0][3])
         nr_running = int(match[0][4])
 
         row = np.copy(last_row)
