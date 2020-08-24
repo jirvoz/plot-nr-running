@@ -248,7 +248,7 @@ print(average_util_table)
 
 # Info about missed events    
 if inconsistent_events:
-    missed_events_table = PrettyTable(['Missed events', 'Missed events %', 'Average missed events per CPU','Worst CPU', 'Worst CPU results', 'Best CPU','Best CPU results'])
+    missed_events_table = PrettyTable(['Unexpected events', 'Unexpected events %', 'Average number of unexpected events per CPU','Worst CPU', 'Worst CPU results', 'Best CPU','Best CPU results'])
     me_summary = dict()
     me_summary["total"] = sum(inconsistent_events.values())
     me_summary["worst_cpu"] = max(inconsistent_events, key=inconsistent_events.get)
@@ -263,5 +263,5 @@ if inconsistent_events:
     print("Total sched_update_nr_running events:", events_count)
 
 else:
-    print("No missed events found\n")
+    print("No unexpected events found\n")
 
