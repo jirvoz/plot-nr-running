@@ -115,10 +115,12 @@ for line in data_file:
         if detected_change != change:
             recorded_inconsistent_event = True
             inconsistent_events[cpu] += 1
+            """
             print('WARNING: Detected missed event number',  sum(inconsistent_events.values()), '- number', inconsistent_events[cpu],' for cpu', cpu)
             print('\tchange ', change, 'computed change ', detected_change, 'nr_running ', nr_running, 'old nr_running ', cpu_nr_running[cpu]) 
             print('\tPrevious line:', previous_line[cpu], end='')
             print('\tCurrent line: ',  line, end='')
+            """
 
     if recorded_inconsistent_event == False and cpu in cpu_state:
         old_state = cpu_state[cpu]
@@ -168,6 +170,10 @@ for line in data_file:
                 continue
         else:
             if current_state == "Running":
+                #CPU went from Idle to Running
+                #To proper account for idle interval, let's pretend it CPU was running at start_time
+                runtime=(start_time, start_time)
+                cpu_run_intervals[cpu].append(runtime)
                 #Record time when CPU went to running state
                 runtime=(point_time,None)
                 cpu_run_intervals[cpu].append(runtime)
@@ -175,19 +181,34 @@ for line in data_file:
                 #CPU went from running to idle
                 runtime=(start_time,point_time)
                 cpu_run_intervals[cpu].append(runtime)
+#    if cpu == 67:
+#        print(line,end='')
+#        pprint.pprint(cpu_run_intervals[67])
+#        print(current_state)
                 
 stop_time = point_time
 for cpu in cpu_state:
     if cpu_state[cpu] == "Running":
         start,end = cpu_run_intervals[cpu][-1]
-        runtime = (start, point_time)
+        runtime = (start, stop_time)
         cpu_run_intervals[cpu][-1]=runtime
-        
+    else:
+        #To proper account for the last idle interval
+        #let's pretend that as the end of measurement, CPU went to Running state
+        runtime = (stop_time, stop_time)
+        cpu_run_intervals[cpu].append(runtime)
+
+#print("Start and stop times")
+#pprint.pprint([start_time, stop_time])
+#for cpu in [67,68]:
+#    print("runtime intervals for cpu", cpu)
+#    pprint.pprint(cpu_run_intervals[cpu])
+
 #Create utilization table            
 cpu_util_table = PrettyTable(['CPU', 'Runtime (s)', 'Runtime %', 'Idle (s)', 'Idle %','Total time (s)'])
 cpu_util = dict()
 
-for cpu in sorted(cpu_run_intervals):
+for idx,cpu in enumerate(sorted(cpu_run_intervals)):
     time=[numpy.float64(0.0),numpy.float64(0.0)]
     last_idle_transition=-1.0
     #element 0 => runtime
@@ -200,10 +221,12 @@ for cpu in sorted(cpu_run_intervals):
                 time[1] += start - last_idle_transition
             last_idle_transition = end
         else:
-            #this is the last interval
-            if last_idle_transition >= 0.0:
-                time[1] += start - last_idle_transition
-            break
+            #Undefined end time - code should be never get into this state
+            print("ERROR - end time of runtime interval for cpu", cpu, "is undefined")
+            print("Code should never get into this state. Please contact authors")
+            print("Runtime interval:")
+            pprint.pprint(cpu_run_intervals[cpu][idx])
+            
     cpu_util[cpu]=time
     total = time[0] + time[1]
     result = [cpu,
