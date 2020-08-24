@@ -65,12 +65,16 @@ if [[ "$argParallel" == "0" ]]; then
 
   for file in "$@"; do
     out_file="${file%.*}.png"
-    echo "Processing file '$file', output in '${out_file}'"
+    out_file1="${file%.*}.info"
+    echo "Processing file '$file', output in '${out_file}' and '${out_file1}'"
     COMMAND=("${SCRIPT_DIR}/plot-nr-running.py" "--lscpu-file" "$argLscpu" "--image-file" "$out_file" "$file")
+    COMMAND1=("${SCRIPT_DIR}/check-nr-running.py" "--lscpu-file" "$argLscpu" "$file")
     
     if [[ "$argDry" == "1" ]]; then
       printf "'%s' " "${COMMAND[@]}"
       echo
+      printf "'%s' " "${COMMAND1[@]}"
+      printf " > '%s\n'" "$out_file1"
       continue
     fi
 
@@ -81,6 +85,15 @@ if [[ "$argParallel" == "0" ]]; then
       echo "Failed to process ${file}. The command was:"
       printf "%s\n" "${COMMAND[*]}"
     fi
+
+    "${COMMAND1[@]}" > "$out_file1"
+    ret_code=$?
+
+    if [[ "$ret_code" -ne 0 ]]; then
+      echo "Failed to process ${file}. The command was:"
+      printf "%s" "${COMMAND1[*]}"
+      printf " > '%s\n'" "$out_file1"
+    fi
   done
 
 else
@@ -88,6 +101,10 @@ else
   declare -a parOpt=("--verbose" "--memfree=4G")
   [[ "$argDry" == "1" ]] && parOpt+=("--dry-run")
   (( argParallelJobs > 0 )) && parOpt+=("--jobs=$argParallelJobs")
+  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/check-nr-running.sh" "--lscpu=$argLscpu" "{}" ">" "{.}.info" ":::" "$@")
+  printf "'%s' " "${COMMAND[@]}"
+  echo
+
   COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ">" "{.}.log" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
