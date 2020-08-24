@@ -115,12 +115,10 @@ for line in data_file:
         if detected_change != change:
             recorded_inconsistent_event = True
             inconsistent_events[cpu] += 1
-            """
             print('WARNING: Detected missed event number',  sum(inconsistent_events.values()), '- number', inconsistent_events[cpu],' for cpu', cpu)
             print('\tchange ', change, 'computed change ', detected_change, 'nr_running ', nr_running, 'old nr_running ', cpu_nr_running[cpu]) 
             print('\tPrevious line:', previous_line[cpu], end='')
             print('\tCurrent line: ',  line, end='')
-            """
 
     if recorded_inconsistent_event == False and cpu in cpu_state:
         old_state = cpu_state[cpu]
