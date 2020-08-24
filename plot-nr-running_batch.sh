@@ -18,6 +18,28 @@
 
 LANG=C
 
+#{{{ trap - signal handling
+# Kill the whole process group, thus killing also descendants.
+# Specifying signal EXIT is useful when using set -e
+# See also http://stackoverflow.com/questions/360201/how-do-i-kill-background-processes-jobs-when-my-shell-script-exits
+
+trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
+  local func="$1"; shift
+  for sig in "$@"; do
+# shellcheck disable=SC2064
+    trap "$func $sig" "$sig"
+  done
+}
+
+stop() {
+  trap - SIGINT EXIT
+  printf '\nFunction stop(), part of trap handling in plot-nr-running_batch.sh: %s\n' "received $1, killing children"
+  kill -s SIGINT -- -$BASHPID
+}
+
+trap_with_arg 'stop' EXIT SIGINT SIGTERM SIGHUP
+#}}}
+
 function usage_msg() {
   printf "Usage: %s: --lscpu=LSCPU_FILE TRACE_FILE ... [TRACE_FILE] ...\n\n" "$0"
   printf "Search for kernel trace reports with sched_update_nr_running events and process them with plot-nr-running.sh script.\n"
@@ -187,3 +209,4 @@ if (( ${#FAIL_DIR[@]} > 0 )); then
   printf "\n"
 fi
 
+trap - EXIT SIGINT SIGTERM SIGHUP

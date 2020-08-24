@@ -80,8 +80,8 @@ cpus_count = int(data_file.readline().split('=')[1])
 cpu_state = dict()
 cpu_run_intervals = defaultdict(list)
 cpu_nr_running = dict()
-missed_events = dict()
-missed_events = defaultdict(lambda:0, missed_events)
+inconsistent_events = dict()
+inconsistent_events = defaultdict(lambda:0, inconsistent_events)
 previous_line = dict()
 events_count = 0
 
@@ -89,32 +89,53 @@ for line in data_file:
     match = reg_exp.findall(line)
     if len(match) != 1:
         if "sched_update_nr_running:" in line:
-           print("Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
+           print("WARNING: Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
            print(line, end='')
         continue
+
+    events_count += 1
     pid = int(match[0][0])
     point_time = float(match[0][1])
     cpu = int(match[0][2])
     change = int(match[0][3])
     nr_running = int(match[0][4])
-    events_count += 1
+
+    prev_nr_running = nr_running - change
+    if prev_nr_running < 0:
+        print("WARNING: Detected line with nr_running - change < 0", "nr_running", nr_running, "change", change, "nr_running - change", prev_nr_running)
+        print(line, end='')
+
+    if events_count == 1:
+        start_time = point_time
+
+    recorded_inconsistent_event = False
+#Check for any unexpected events        
+    if cpu in cpu_nr_running:
+        detected_change = nr_running - cpu_nr_running[cpu]
+        if detected_change != change:
+            recorded_inconsistent_event = True
+            inconsistent_events[cpu] += 1
+            print('WARNING: Detected missed event number',  sum(inconsistent_events.values()), '- number', inconsistent_events[cpu],' for cpu', cpu)
+            print('\tchange ', change, 'computed change ', detected_change, 'nr_running ', nr_running, 'old nr_running ', cpu_nr_running[cpu]) 
+            print('\tPrevious line:', previous_line[cpu], end='')
+            print('\tCurrent line: ',  line, end='')
+
+    if recorded_inconsistent_event == False and cpu in cpu_state:
+        old_state = cpu_state[cpu]
+        if (old_state == "Running" and prev_nr_running == 0) or (old_state == "Idle" and prev_nr_running >0):
+            recorded_inconsistent_event = True
+            inconsistent_events[cpu] += 1
+            print("WARNING: Detected inconsistent data. Previous state was", old_state,", which does not correspond to computed previous nr_running value", prev_nr_running)
+            print('\tPrevious line:', previous_line[cpu], end='')
+            print('\tCurrent line: ',  line, end='')
+
+    cpu_nr_running[cpu] = nr_running
+    previous_line[cpu] = line
 
     if nr_running>0:
         current_state="Running"
     else:
         current_state="Idle"
-
-#Check for any unexpected events        
-    if cpu in cpu_nr_running:
-        detected_change = nr_running - cpu_nr_running[cpu]
-        if detected_change != change:
-            missed_events[cpu] += 1
-            print('Detected missed event number',  sum(missed_events.values()), '- number', missed_events[cpu],' for cpu', cpu)
-            print('\tchange ', change, 'detected_change ', detected_change, 'nr_running ', nr_running, 'old nr_running ', cpu_nr_running[cpu]) 
-            print('\tPrevious line:', previous_line[cpu], end='')
-            print('\tCurrent line: ',  line, end='')
-    cpu_nr_running[cpu] = nr_running
-    previous_line[cpu] = line
 
     if cpu in cpu_state:
         #Known state
@@ -133,15 +154,35 @@ for line in data_file:
                 runtime = (start, point_time)
                 cpu_run_intervals[cpu][-1]=runtime
     else:
-        cpu_state[cpu] =  current_state
-        if current_state == "Running":
-            #Record time when CPU went to running state
-            runtime=(point_time,None)
-            cpu_run_intervals[cpu].append(runtime)
+        cpu_state[cpu] = current_state
+        #Compute previous state
+        if prev_nr_running > 0:
+            old_state="Running"
         else:
-            #CPU went to idle. Nothing to record
-            pass
+            old_state="Idle"
 
+        if current_state == old_state:
+            if current_state == "Running":
+                runtime=(start_time,None)
+                cpu_run_intervals[cpu].append(runtime)
+                continue
+        else:
+            if current_state == "Running":
+                #Record time when CPU went to running state
+                runtime=(point_time,None)
+                cpu_run_intervals[cpu].append(runtime)
+            else:
+                #CPU went from running to idle
+                runtime=(start_time,point_time)
+                cpu_run_intervals[cpu].append(runtime)
+                
+stop_time = point_time
+for cpu in cpu_state:
+    if cpu_state[cpu] == "Running":
+        start,end = cpu_run_intervals[cpu][-1]
+        runtime = (start, point_time)
+        cpu_run_intervals[cpu][-1]=runtime
+        
 #Create utilization table            
 cpu_util_table = PrettyTable(['CPU', 'Runtime (s)', 'Runtime %', 'Idle (s)', 'Idle %','Total time (s)'])
 cpu_util = dict()
@@ -181,6 +222,9 @@ if numa_cpus:
         if not node in numa_util:
             numa_util[node] = numpy.zeros(2)
         for cpu in numa_cpus[node]:
+            if not cpu in cpu_util:
+                #Cpu was idle whole time
+                cpu_util[cpu]=[numpy.float64(0.0),numpy.float64(stop_time-start_time)]
             numa_util[node] += cpu_util[cpu]
         total = numa_util[node][0] + numa_util[node][1]
         result = [node,
@@ -203,22 +247,21 @@ print(average_util_table)
 
 
 # Info about missed events    
-if missed_events:
+if inconsistent_events:
     missed_events_table = PrettyTable(['Missed events', 'Missed events %', 'Average missed events per CPU','Worst CPU', 'Worst CPU results', 'Best CPU','Best CPU results'])
     me_summary = dict()
-    me_summary["total"] = sum(missed_events.values())
-    me_summary["worst_cpu"] = max(missed_events, key=missed_events.get)
-    me_summary["best_cpu"] = min(missed_events, key=missed_events.get)
-    me_summary["average"] = me_summary["total"] / len(missed_events)
+    me_summary["total"] = sum(inconsistent_events.values())
+    me_summary["worst_cpu"] = max(inconsistent_events, key=inconsistent_events.get)
+    me_summary["best_cpu"] = min(inconsistent_events, key=inconsistent_events.get)
+    me_summary["average"] = me_summary["total"] / len(inconsistent_events)
     missed_events_table.add_row( [me_summary["total"],
             '{:.2g}%'.format(me_summary["total"]/events_count*100.0),
             '{:.2g}'.format(me_summary["average"]),
-            me_summary["worst_cpu"], missed_events[me_summary["worst_cpu"]],
-            me_summary["best_cpu"], missed_events[me_summary["best_cpu"]] ])
+            me_summary["worst_cpu"], inconsistent_events[me_summary["worst_cpu"]],
+            me_summary["best_cpu"], inconsistent_events[me_summary["best_cpu"]] ])
     print(missed_events_table)
     print("Total sched_update_nr_running events:", events_count)
 
 else:
     print("No missed events found\n")
 
-#pprint.pprint(cpu_run_intervals[0])

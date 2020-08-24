@@ -18,6 +18,28 @@
 
 LANG=C
 
+#{{{ trap - signal handling
+# Kill the whole process group, thus killing also descendants.
+# Specifying signal EXIT is useful when using set -e
+# See also http://stackoverflow.com/questions/360201/how-do-i-kill-background-processes-jobs-when-my-shell-script-exits
+
+trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
+  local func="$1"; shift
+  for sig in "$@"; do
+# shellcheck disable=SC2064
+    trap "$func $sig" "$sig"
+  done
+}
+
+stop() {
+  trap - SIGINT EXIT
+  printf '\nFunction stop(), part of trap handling in plot-nr-running.sh: %s\n' "received $1, killing children"
+  kill -s SIGINT -- -$BASHPID
+}
+
+trap_with_arg 'stop' EXIT SIGINT SIGTERM SIGHUP
+#}}}
+
 function usage_msg() {
   printf "Usage: %s: --lscpu=LSCPU_FILE TRACE_FILE ... [TRACE_FILE] ...\n\n" "$0"
   printf "Process kernel trace reports with sched_update_nr_running events.\n"
@@ -101,15 +123,15 @@ else
   declare -a parOpt=("--verbose" "--memfree=4G")
   [[ "$argDry" == "1" ]] && parOpt+=("--dry-run")
   (( argParallelJobs > 0 )) && parOpt+=("--jobs=$argParallelJobs")
-  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/check-nr-running.sh" "--lscpu=$argLscpu" "{}" ">" "{.}.info" ":::" "$@")
+  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/check-nr-running.py" "--lscpu=$argLscpu" "{}" ">" "{.}.info" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
+  "${COMMAND[@]}"
 
-  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.sh" "--lscpu=$argLscpu" "{}" ">" "{.}.log" ":::" "$@")
+  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.py" "--lscpu=$argLscpu" "{}" ">" "{.}.log" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
   "${COMMAND[@]}"
 fi
 
-
-
+trap - EXIT SIGINT SIGTERM SIGHUP
