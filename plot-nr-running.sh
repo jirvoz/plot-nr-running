@@ -128,7 +128,7 @@ else
   echo
   "${COMMAND[@]}"
 
-  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.py" "--lscpu=$argLscpu" "{}" ">" "{.}.log" ":::" "$@")
+  COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.py" "--lscpu=$argLscpu" "--image-file" "{.}.png" "{}" ">" "{.}.log" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
   "${COMMAND[@]}"
