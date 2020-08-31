@@ -64,6 +64,7 @@ def draw_reports(cpu_values, time_axis, file_names, image_file=None, numa_cpus={
     #plt.subplots_adjust(left=0.05, right=0.90, top=0.95, bottom=0.1)
 
     cbar = fig.colorbar(mesh, cax=plt.axes((0.95, 0.1, 0.02, 0.85)), cmap='Reds')
+    cbar.ax.set_ylabel("CPU utilization (%)")
 
     if image_file:
         plt.savefig(image_file)
@@ -146,6 +147,7 @@ def draw_dual_reports(cpu_values, numa_values, time_axis, file_names, image_file
     #plt.subplots_adjust(left=0.05, right=0.90, top=0.95, bottom=0.1)
 
     cbar = fig.colorbar(mesh, cax=plt.axes((0.95, 0.1, 0.02, 0.85)), cmap='Reds')
+    cbar.ax.set_ylabel("CPU utilization (%)")
 
     if image_file:
         plt.savefig(image_file)
