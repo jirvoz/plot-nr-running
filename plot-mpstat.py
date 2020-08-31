@@ -18,7 +18,7 @@ from matplotlib.ticker import MultipleLocator
 def draw_reports(cpu_values, time_axis, file_names, image_file=None, numa_cpus={}):
     cols = int(np.ceil(np.sqrt(len(cpu_values))))
     rows = int(np.ceil(len(cpu_values) / cols))
-    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 5))
+    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8))
 
     for i, vmap in enumerate(cpu_values):
         ax = axs.flat[i]
@@ -73,7 +73,7 @@ def draw_reports(cpu_values, time_axis, file_names, image_file=None, numa_cpus={
 def draw_dual_reports(cpu_values, numa_values, time_axis, file_names, image_file=None, numa_cpus={}):
     cols = int(np.ceil(np.sqrt(len(cpu_values))))
     rows = int(np.ceil(len(cpu_values) / cols)) * 2
-    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 5))
+    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8))
 
     for i in range(rows // 2):
         for j in range(cols):
