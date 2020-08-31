@@ -21,7 +21,10 @@ def draw_reports(cpu_values, time_axis, file_names, image_file=None, numa_cpus={
     fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8))
 
     for i, vmap in enumerate(cpu_values):
-        ax = axs.flat[i]
+        if len(cpu_values) > 1:
+            ax = axs.flat[i]
+        else:
+            ax = axs
         plt.sca(ax)
 
         # Transpose heat map data to right axes
