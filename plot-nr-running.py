@@ -153,22 +153,26 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     last_imbalance_start = 0
     point_time = 0
 
-    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
+    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
 
     for line in input_file:
         match = reg_exp.findall(line)
 
         # Check the correct event
         if len(match) != 1:
+            if "sched_update_nr_running:" in line:
+               print("Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
+               print(line, end='')
             continue
 
         pid = int(match[0][0])
         point_time = float(match[0][1])
         cpu = int(match[0][2])
-        value = int(match[0][3])
+        change = int(match[0][3])
+        nr_running = int(match[0][4])
 
         row = np.copy(last_row)
-        row[cpu] = value
+        row[cpu] = nr_running
         row_min = min(row)
         row_max = max(row)
         diff = row_max - row_min
