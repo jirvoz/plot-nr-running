@@ -82,11 +82,12 @@ def draw_report(map_values, time_axis, task_count, input_file,
 
 def read_nodes(lscpu_file):
     numa_cpus = {}
+    NUMA_re=re.compile(r'NUMA.*CPU\(s\):')
     for line in lscpu_file:
         # Find NUMA nodes associated with CPUs:
         if line[:13] == 'NUMA node(s):':
             continue
-        elif line[:9] == 'NUMA node':
+        elif NUMA_re.search(line):
             words = line.split()
             cpus = words[-1].split(',')
             for cpu in cpus:
