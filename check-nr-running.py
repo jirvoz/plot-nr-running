@@ -30,6 +30,7 @@ import pprint
 
 def read_nodes(lscpu_file):
     numa_cpus = {}
+    NUMA_re=re.compile(r'NUMA.*CPU\(s\):')
     for line in lscpu_file:
         # Find number of CPUs and NUMA nodes:
         if line[:7] == 'CPU(s):':
@@ -38,7 +39,7 @@ def read_nodes(lscpu_file):
             nodes_nb = int(line[13:])
 
         # Find NUMA nodes associated with CPUs:
-        elif line[:9] == 'NUMA node':
+        elif NUMA_re.search(line):
             words = line.split()
             cpus = words[-1].split(',')
             for cpu in cpus:
