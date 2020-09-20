@@ -147,13 +147,13 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
     cpus_count = int(input_file.readline().split('=')[1])
 
-    last_row = np.zeros(cpus_count)
+    last_row = np.full(cpus_count, -1)
     map_values.append(last_row)
 
     last_imbalance_start = 0
     point_time = 0
 
-    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
+    reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
 
     for line in input_file:
         match = reg_exp.findall(line)
@@ -161,8 +161,8 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         # Check the correct event
         if len(match) != 1:
             if "sched_update_nr_running:" in line:
-               print("Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
-               print(line, end='')
+                print("Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
+                print(line, end='')
             continue
 
         pid = int(match[0][0])
@@ -170,6 +170,10 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         cpu = int(match[0][2])
         change = int(match[0][3])
         nr_running = int(match[0][4])
+
+        if last_row[cpu] == -1:
+            for i in range(len(map_values)):
+                map_values[i][cpu] = nr_running - change
 
         row = np.copy(last_row)
         row[cpu] = nr_running
