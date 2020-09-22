@@ -151,7 +151,6 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     last_row = np.full(cpus_count, -1)
     map_values.append(last_row)
 
-    last_imbalance_start = 0
     point_time = 0
 
     reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
@@ -178,39 +177,45 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
         row = np.copy(last_row)
         row[cpu] = nr_running
-        row_min = min(row)
-        row_max = max(row)
-        diff = row_max - row_min
-
-        # Check the start of imbalance
-        if diff >= threshold and last_imbalance_start == 0:
-            last_imbalance_start = point_time
-        if diff < threshold and last_imbalance_start != 0:
-            # Print and store long imbalances
-            if (point_time - last_imbalance_start) >= duration:
-                imbalances.append([(last_imbalance_start, threshold),
-                                    (point_time, threshold)])
-                print(f"Imbalance from timestamp {last_imbalance_start}"
-                f" lasting {point_time - last_imbalance_start} seconds")
-            last_imbalance_start = 0
 
         # Store plotting data with optional sampling
         counter += 1
         if counter >= sampling:
             counter = 0
             map_values.append(row)
-            differences.append(diff)
-            sums.append(sum(row))
             time_axis.append(point_time)
         last_row = row
 
+    last_imbalance_start = 0
+
+    # Second run to compute imbalances
+    for i in range(len(time_axis)):
+        row_min = min(map_values[i])
+        row_max = max(map_values[i])
+        diff = row_max - row_min
+
+        # Check the start of imbalance
+        if diff >= threshold and last_imbalance_start == 0:
+            last_imbalance_start = time_axis[i]
+        if diff < threshold and last_imbalance_start != 0:
+            # Print and store long imbalances
+            if (time_axis[i] - last_imbalance_start) >= duration:
+                imbalances.append([(last_imbalance_start, threshold),
+                                    (time_axis[i], threshold)])
+                print(f"Imbalance from timestamp {last_imbalance_start}"
+                f" lasting {time_axis[i] - last_imbalance_start} seconds")
+            last_imbalance_start = 0
+
+        differences.append(diff)
+        sums.append(sum(map_values[i]))
+
     # Check for unreported imbalance lasting to the very end of input
     if last_imbalance_start != 0 \
-       and (point_time - last_imbalance_start) >= duration:
+       and (time_axis[-1] - last_imbalance_start) >= duration:
         imbalances.append([(last_imbalance_start, threshold),
-                            (point_time, threshold)])
+                            (time_axis[-1], threshold)])
         print(f"Imbalance from timestamp {last_imbalance_start}"
-        f" lasting {point_time - last_imbalance_start} seconds")
+        f" lasting {time_axis[-1] - last_imbalance_start} seconds")
 
     if not imbalances:
         print("No imbalance found")
