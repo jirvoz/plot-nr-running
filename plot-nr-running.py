@@ -174,8 +174,8 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         if last_row[cpu] == -1:
         # First time we got data for this CPU. Compute previous value as nr_running - change
         # and update all data already stored
-            for i in enumerate(map_values):
-                map_values[i][cpu] = nr_running - change
+            for val in map_values:
+                val[cpu] = nr_running - change
 
         row = np.copy(last_row)
         row[cpu] = nr_running
@@ -195,21 +195,21 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         sys.exit(0)
 
     # Second run to compute imbalances - process all rows from map_values
-    for i in enumerate(time_axis):
+    for i, time in enumerate(time_axis):
         row_min = min(map_values[i])
         row_max = max(map_values[i])
         diff = row_max - row_min
 
         # Check the start of imbalance
         if diff >= threshold and last_imbalance_start == 0:
-            last_imbalance_start = time_axis[i]
+            last_imbalance_start = time
         if diff < threshold and last_imbalance_start != 0:
             # Print and store long imbalances
-            if (time_axis[i] - last_imbalance_start) >= duration:
+            if (time - last_imbalance_start) >= duration:
                 imbalances.append([(last_imbalance_start, threshold),
-                                   (time_axis[i], threshold)])
+                                   (time, threshold)])
                 print(f"Imbalance from timestamp {last_imbalance_start}"
-                      f" lasting {time_axis[i] - last_imbalance_start} seconds")
+                      f" lasting {time - last_imbalance_start} seconds")
             last_imbalance_start = 0
 
         differences.append(diff)
