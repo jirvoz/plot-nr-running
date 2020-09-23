@@ -146,7 +146,7 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
     cpus_count = int(input_file.readline().split('=')[1])
 
-    # For each line in trace report, row is NumPy array reprenting number of processes on each CPU
+    # For each line in trace report, row is NumPy array representing number of processes on each CPU
     # -1 means no data yet
     last_row = np.full(cpus_count, -1)
     map_values.append(last_row)
