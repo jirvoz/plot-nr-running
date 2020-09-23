@@ -21,13 +21,11 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import argparse
-from datetime import datetime, timedelta
-import math
 import sys
 import re
 
 import numpy as np
-import matplotlib
+#import matplotlib
 #matplotlib.use('agg')  # For machines without tkinter
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
@@ -114,7 +112,7 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
 
 def read_nodes(lscpu_file):
     numa_cpus = {}
-    NUMA_re=re.compile(r'NUMA.*CPU\(s\):')
+    NUMA_re = re.compile(r'NUMA.*CPU\(s\):')
     for line in lscpu_file:
         # Find number of CPUs and NUMA nodes:
         if line[:7] == 'CPU(s):':
@@ -148,6 +146,8 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
     cpus_count = int(input_file.readline().split('=')[1])
 
+    # For each line in trace report, row is NumPy array reprenting number of processes on each CPU
+    # -1 means no data yet
     last_row = np.full(cpus_count, -1)
     map_values.append(last_row)
 
@@ -172,7 +172,9 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         nr_running = int(match[0][4])
 
         if last_row[cpu] == -1:
-            for i in range(len(map_values)):
+        # First time we got data for this CPU. Compute previous value as nr_running - change
+        # and update all data already stored
+            for i in enumerate(map_values):
                 map_values[i][cpu] = nr_running - change
 
         row = np.copy(last_row)
@@ -188,8 +190,12 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
     last_imbalance_start = 0
 
-    # Second run to compute imbalances
-    for i in range(len(time_axis)):
+    if len(time_axis) == 0:
+        print("No sched_update_nr_running found. Exiting.")
+        sys.exit(0)
+
+    # Second run to compute imbalances - process all rows from map_values
+    for i in enumerate(time_axis):
         row_min = min(map_values[i])
         row_max = max(map_values[i])
         diff = row_max - row_min
@@ -201,9 +207,9 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
             # Print and store long imbalances
             if (time_axis[i] - last_imbalance_start) >= duration:
                 imbalances.append([(last_imbalance_start, threshold),
-                                    (time_axis[i], threshold)])
+                                   (time_axis[i], threshold)])
                 print(f"Imbalance from timestamp {last_imbalance_start}"
-                f" lasting {time_axis[i] - last_imbalance_start} seconds")
+                      f" lasting {time_axis[i] - last_imbalance_start} seconds")
             last_imbalance_start = 0
 
         differences.append(diff)
@@ -213,9 +219,9 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     if last_imbalance_start != 0 \
        and (time_axis[-1] - last_imbalance_start) >= duration:
         imbalances.append([(last_imbalance_start, threshold),
-                            (time_axis[-1], threshold)])
+                           (time_axis[-1], threshold)])
         print(f"Imbalance from timestamp {last_imbalance_start}"
-        f" lasting {time_axis[-1] - last_imbalance_start} seconds")
+              f" lasting {time_axis[-1] - last_imbalance_start} seconds")
 
     if not imbalances:
         print("No imbalance found")
