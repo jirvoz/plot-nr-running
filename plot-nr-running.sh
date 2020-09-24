@@ -82,6 +82,8 @@ done
 [[ -z "$1" ]] && { echo "No kernel trace files to process provided."; usage_msg; }
 
 SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+#This is needed to avoid _tkinter.TclError: couldn't connect to display "localhost:10.0" type of error
+unset DISPLAY
 
 if [[ "$argParallel" == "0" ]]; then
 
