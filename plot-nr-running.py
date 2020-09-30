@@ -25,12 +25,13 @@ import sys
 import re
 
 import numpy as np
-#import matplotlib
-#matplotlib.use('agg')  # For machines without tkinter
+# import matplotlib
+# matplotlib.use('agg')  # For machines without tkinter
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
 from matplotlib.ticker import MultipleLocator
+
 
 def draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus={}):
     # Transpose heat map data to right axes
@@ -87,9 +88,9 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     axs[2].set_ylabel("Sum of tasks")
     axs[2].set_xlabel("Timestamp (seconds)")
 
-    axs[1].set_ylim(ymin=0)
+    axs[1].set_ylim(bottom=0)
     axs[1].grid()
-    axs[2].set_ylim(ymin=0)
+    axs[2].set_ylim(bottom=0)
     axs[2].grid()
 
     # Separate CPUs with lines by NUMA nodes
@@ -144,7 +145,11 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     sums = []
     counter = 0
 
-    cpus_count = int(input_file.readline().split('=')[1])
+    try:
+        cpus_count = int(input_file.readline().split('=')[1])
+    except Exception e:
+        print("Couldn't get number of CPUs")
+        sys.exit(1)
 
     # For each line in trace report, row is NumPy array representing number of processes on each CPU
     # -1 means no data yet
