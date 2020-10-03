@@ -147,8 +147,8 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
     try:
         line = input_file.readline()
-        cpus_count = int(input_file.readline().split('=')[1])
-    except IndexError:
+        cpus_count = int(line().split('=')[1])
+    except (ValueError, IndexError):
         print("ERROR: Couldn't get number of CPUs from trace file.")
         print("       Unexpected trace file format. First line is expected to have form: 'cpus=128'")
         print("       Input line: '{}'".format(line.rstrip('\n')))
