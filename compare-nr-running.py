@@ -175,7 +175,6 @@ def read_nodes(lscpu_file):
 
 
 def process_report(title, input_file, sampling, threshold, duration, image_file=None, numa_cpus={}):
-    cpus_count = 0
     time_axis = []
     map_values = []
     differences = []
@@ -183,7 +182,18 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     sums = []
     counter = 0
 
-    cpus_count = int(input_file.readline().split('=')[1])
+    reg_exp = re.compile(r"^cpus=(\d+)$")
+    line = input_file.readline()
+    line_count = 1
+    match = reg_exp.findall(line)
+    if match:
+        cpus_count = int(match[0])
+    else:
+        print("ERROR: Couldn't get number of CPUs from the trace file.")
+        print("       Unexpected trace file format. First line is expected to have form '{}'".format(reg_exp.pattern))
+        print("       Input line: '{}'".format(line.rstrip('\n')))
+        print("       Exiting")
+        sys.exit(1)
 
     last_row = np.zeros(cpus_count)
     map_values.append(last_row)
@@ -192,26 +202,30 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     point_time = 0
     start_time = -1
 
-    reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) .*nr_running=(\d+)")
-
+    reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
     for line in input_file:
+        line_count += 1
         match = reg_exp.findall(line)
 
         # Check the correct event
-        if len(match) != 1:
+        if not match:
+            if "sched_update_nr_running:" in line:
+                print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match findall regex '{}'!".format(line_count,reg_exp.pattern))
+                print(line, end='')
             continue
 
         pid = int(match[0][0])
         point_time = float(match[0][1])
         cpu = int(match[0][2])
-        value = int(match[0][3])
+        change = int(match[0][3])
+        nr_running = int(match[0][4])
 
         if start_time < 0:
             start_time += point_time
         point_time -= start_time
 
         row = np.copy(last_row)
-        row[cpu] = value
+        row[cpu] = nr_running
         row_min = min(row)
         row_max = max(row)
         diff = row_max - row_min
