@@ -137,7 +137,6 @@ def read_nodes(lscpu_file):
 
 
 def process_report(title, input_file, sampling, threshold, duration, image_file=None, numa_cpus={}):
-    cpus_count = 0
     time_axis = []
     map_values = []
     differences = []
@@ -145,10 +144,17 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     sums = []
     counter = 0
 
-    try:
-        cpus_count = int(input_file.readline().split('=')[1])
-    except Exception e:
-        print("Couldn't get number of CPUs")
+    reg_exp = re.compile(r"^cpus=(\d+)$")
+    line = input_file.readline()
+    line_count = 1
+    match = reg_exp.findall(line)
+    if match:
+        cpus_count = int(match[0])
+    else:
+        print("ERROR: Couldn't get number of CPUs from the trace file.")
+        print("       Unexpected trace file format. First line is expected to have form '{}'".format(reg_exp.pattern))
+        print("       Input line: '{}'".format(line.rstrip('\n')))
+        print("       Exiting")
         sys.exit(1)
 
     # For each line in trace report, row is NumPy array representing number of processes on each CPU
@@ -159,14 +165,14 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
     point_time = 0
 
     reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
-
     for line in input_file:
+        line_count += 1
         match = reg_exp.findall(line)
 
         # Check the correct event
-        if len(match) != 1:
+        if not match:
             if "sched_update_nr_running:" in line:
-                print("Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
+                print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match findall regex '{}'!".format(line_count,reg_exp.pattern))
                 print(line, end='')
             continue
 

@@ -24,9 +24,9 @@ import re
 import argparse
 from collections import defaultdict
 import sys
+import pprint
 from prettytable import PrettyTable
 import numpy
-import pprint
 
 def read_nodes(lscpu_file):
     numa_cpus = {}
@@ -56,7 +56,7 @@ parser = argparse.ArgumentParser(description="Analyze kernel trace report with s
         "Report CPU utilization based on trace report and check for inconsitency in data (missed events)")
 parser.add_argument("input_file", nargs="?", type=argparse.FileType('r'), default=sys.stdin)
 parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
-    help="File with output of lscpu from observed machine")
+                    help="File with output of lscpu from observed machine")
 
 try:
     args = parser.parse_args()
@@ -69,7 +69,6 @@ if args.lscpu_file:
 #pprint.pprint(numa_cpus)
 
 
-reg_exp=re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
 
 if args.input_file.name.endswith(".xz"):
     args.input_file.close()
@@ -77,7 +76,19 @@ if args.input_file.name.endswith(".xz"):
 else:
     data_file = args.input_file
 
-cpus_count = int(data_file.readline().split('=')[1])
+reg_exp = re.compile(r"^cpus=(\d+)$")
+line = data_file.readline()
+line_count = 1
+match = reg_exp.findall(line)
+if match:
+    cpus_count = int(match[0])
+else:
+    print("ERROR: Couldn't get number of CPUs from the trace file.")
+    print("       Unexpected trace file format. First line is expected to have form '{}'".format(reg_exp.pattern))
+    print("       Input line: '{}'".format(line.rstrip('\n')))
+    print("       Exiting")
+    sys.exit(1)
+
 cpu_state = dict()
 cpu_run_intervals = defaultdict(list)
 cpu_nr_running = dict()
@@ -86,12 +97,16 @@ inconsistent_events = defaultdict(lambda:0, inconsistent_events)
 previous_line = dict()
 events_count = 0
 
+reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
 for line in data_file:
+    line_count += 1
     match = reg_exp.findall(line)
-    if len(match) != 1:
+
+    # Check the correct event
+    if not match:
         if "sched_update_nr_running:" in line:
-           print("WARNING: Detected line with 'sched_update_nr_running:' string, but not matching findall regex!")
-           print(line, end='')
+            print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match findall regex '{}'!".format(line_count,reg_exp.pattern))
+            print(line, end='')
         continue
 
     events_count += 1
