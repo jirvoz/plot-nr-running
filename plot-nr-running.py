@@ -32,8 +32,17 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 from matplotlib import collections as mc
 from matplotlib.ticker import MultipleLocator
 
+# Per-CPU minor ticks are unreadable above this many CPUs and, more
+# importantly, requesting one tick per CPU can exceed matplotlib's internal
+# tick limit (Locator.MAXTICKS == 1000) on many-core systems, which aborts
+# plotting. On such machines we drop the per-CPU grid and keep only the
+# per-NUMA-node major ticks.
+MINOR_TICK_CPU_LIMIT = 256
 
-def draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus={}):
+
+def draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus=None):
+    if numa_cpus is None:
+        numa_cpus = {}
     # Transpose heat map data to right axes
     map_values = np.array(map_values)[:-1, :].transpose()
 
@@ -57,7 +66,15 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
 
     # Draw the main heat map
     x_grid, y_grid = np.meshgrid(time_axis, range(len(map_values)))
-    mesh = axs[0].pcolormesh(x_grid, y_grid, map_values, vmin=0, vmax=4, cmap=cmap, norm=norm)
+    mesh = axs[0].pcolormesh(
+        x_grid,
+        y_grid,
+        map_values,
+        cmap=cmap,
+        norm=norm,
+        shading='nearest',
+        rasterized=True,
+    )
 
     axs[0].set_xlim(time_axis[0], time_axis[-1])
     axs[0].set_ylim([0, map_values.shape[0] - 1])
@@ -97,10 +114,11 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     plt.sca(axs[0])
     if numa_cpus:
         axs[0].grid(True, which='major', axis='y', linestyle='--', color='w')
-        axs[0].yaxis.set_minor_locator(MultipleLocator(1))
-        plt.yticks(range(0, map_values.shape[0] - 1, len(numa_cpus[0])),
+        if map_values.shape[0] <= MINOR_TICK_CPU_LIMIT:
+            axs[0].yaxis.set_minor_locator(MultipleLocator(1))
+        plt.yticks(range(0, map_values.shape[0] - 1, len(next(iter(numa_cpus.values())))),
                    map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
-    else:
+    elif map_values.shape[0] <= MINOR_TICK_CPU_LIMIT:
         axs[0].set_yticks(range(map_values.shape[0] - 1))
 
     plt.title(title)
@@ -109,6 +127,10 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
         plt.savefig(image_file)
     else:
         plt.show()
+
+    # Release the figure; pyplot keeps a reference to every figure it creates,
+    # so a caller that renders many files in one process leaks one each time.
+    plt.close(fig)
 
 
 def read_nodes(lscpu_file):
@@ -136,26 +158,40 @@ def read_nodes(lscpu_file):
     return numa_cpus
 
 
-def process_report(title, input_file, sampling, threshold, duration, image_file=None, numa_cpus={}):
+def process_report(title, input_file, sampling, time_sampling, threshold, duration, image_file=None, numa_cpus=None):
+    if numa_cpus is None:
+        numa_cpus = {}
     time_axis = []
     map_values = []
     differences = []
     imbalances = []
     sums = []
     counter = 0
+    cpus_count = 0
+
+    if time_sampling > 0:
+        sample_period = 1.0 / time_sampling
+    else:
+        sample_period = 0
 
     reg_exp = re.compile(r"^cpus=(\d+)$")
-    line = input_file.readline()
-    line_count = 1
-    match = reg_exp.findall(line)
-    if match:
-        cpus_count = int(match[0])
-    else:
-        print("ERROR: Couldn't get number of CPUs from the trace file.")
-        print("       Unexpected trace file format. First line is expected to have form '{}'".format(reg_exp.pattern))
-        print("       Input line: '{}'".format(line.rstrip('\n')))
-        print("       Exiting")
-        sys.exit(1)
+    while not cpus_count:
+        line = input_file.readline()
+        line_count = 1
+        match = reg_exp.findall(line)
+        if match:
+            cpus_count = int(match[0])
+        elif "empty" in line:
+            # Information of missing records for specific cpu
+            continue
+        else:
+            print("ERROR: Couldn't get number of CPUs from the trace file.")
+            print("       Unexpected trace file format. First line is expected to have form '{}'".format(reg_exp.pattern))
+            print("       Input line: '{}'".format(line.rstrip('\n')))
+            print("       Exiting")
+            # Return rather than sys.exit(): process_report is reusable, and a
+            # SystemExit here would tear down any caller that imports it.
+            return
 
     # For each line in trace report, row is NumPy array representing number of processes on each CPU
     # -1 means no data yet
@@ -172,19 +208,19 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         # Check the correct event
         if not match:
             if "sched_update_nr_running:" in line:
-                print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match findall regex '{}'!".format(line_count,reg_exp.pattern))
+                print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match findall regex '{}'!".format(line_count, reg_exp.pattern))
                 print(line, end='')
             continue
 
-        pid = int(match[0][0])
+        # pid = int(match[0][0])
         point_time = float(match[0][1])
         cpu = int(match[0][2])
         change = int(match[0][3])
         nr_running = int(match[0][4])
 
         if last_row[cpu] == -1:
-        # First time we got data for this CPU. Compute previous value as nr_running - change
-        # and update all data already stored
+            # First time we got data for this CPU. Compute previous value as nr_running - change
+            # and update all data already stored
             for val in map_values:
                 val[cpu] = nr_running - change
 
@@ -195,15 +231,17 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
         counter += 1
         if counter >= sampling:
             counter = 0
-            map_values.append(row)
-            time_axis.append(point_time)
+            if not time_axis or (point_time - time_axis[-1]) >= sample_period:
+                map_values.append(row)
+                time_axis.append(point_time)
         last_row = row
 
     last_imbalance_start = 0
 
     if len(time_axis) == 0:
         print("No sched_update_nr_running found. Exiting.")
-        sys.exit(0)
+        # Return rather than sys.exit(): see note above.
+        return
 
     # Second run to compute imbalances - process all rows from map_values
     for i, time in enumerate(time_axis):
@@ -242,11 +280,18 @@ def process_report(title, input_file, sampling, threshold, duration, image_file=
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="Create heatmap and find"
-        " imbalances from recorded sched_update_nr_running events with trace-cmd.")
+    parser = argparse.ArgumentParser(
+        description="Create heatmap and find imbalances from recorded"
+        " sched_update_nr_running events with trace-cmd.")
     parser.add_argument("input_file", nargs="?", type=argparse.FileType('r'), default=sys.stdin)
     parser.add_argument("--sampling", default=1, type=int,
-                        help="Sampling of plotted data to reduce drawing point_time")
+                        help="Sampling of input data to reduce drawing time"
+                        " - takes each N-th line of input file."
+                        " Is applied before time sampling.")
+    parser.add_argument("--time-sampling", default=0, type=int,
+                        help="Reduce input data to N records per core per"
+                        " second to shorten drawing time."
+                        " Is applied after input sampling.")
     parser.add_argument("--threshold", default=2, type=int,
                         help="Minimal difference of process count considered as imbalance")
     parser.add_argument("--duration", default=0.05, type=float,
@@ -256,7 +301,9 @@ if __name__ == '__main__':
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
                         help="File with output of lscpu from observed machine")
     parser.add_argument("--name", type=str, default=None,
-                        help="Filename to be displayed in graph. Usefull when reading input from stdin.")
+                        help="Filename to be displayed in graph."
+                        " Usefull when reading input from stdin.")
+    parser.add_argument("--title", type=str, default=None, help="Future title")
 
     try:
         args = parser.parse_args()
@@ -272,12 +319,17 @@ if __name__ == '__main__':
     else:
         title = "Plot of '" + args.input_file.name
 
+    if not args.image_file:
+        args.image_file = args.input_file.name + ".png"
+
     if args.input_file.name.endswith(".xz"):
         args.input_file.close()
         import lzma
         with lzma.open(args.input_file.name, 'rt') as decompressed:
-            process_report(title, decompressed, args.sampling, args.threshold,
+            process_report(title, decompressed, args.sampling,
+                           args.time_sampling, args.threshold,
                            args.duration, args.image_file, numa_cpus)
     else:
-        process_report(title, args.input_file, args.sampling, args.threshold,
+        process_report(title, args.input_file, args.sampling,
+                       args.time_sampling, args.threshold,
                        args.duration, args.image_file, numa_cpus)

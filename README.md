@@ -28,7 +28,12 @@ trace-cmd report | ./plot-nr-running.py
 ```
 Other optional arguments can be viewed using `--help` arguments:
 ```
-  --sampling SAMPLING   Sampling of plotted data to reduce drawing point_time
+  --sampling SAMPLING   Sampling of input data to reduce drawing time - takes
+                        each N-th line of input file. Is applied before time
+                        sampling.
+  --time-sampling TIME_SAMPLING
+                        Reduce input data to N records per core per second to
+                        shorten drawing time. Is applied after input sampling.
   --threshold THRESHOLD
                         Minimal difference of process count considered as
                         imbalance
