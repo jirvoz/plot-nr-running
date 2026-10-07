@@ -19,9 +19,10 @@
 LANG=C
 
 #{{{ trap - signal handling
-# Kill the whole process group, thus killing also descendants.
-# Specifying signal EXIT is useful when using set -e
-# See also http://stackoverflow.com/questions/360201/how-do-i-kill-background-processes-jobs-when-my-shell-script-exits
+# Pass the signal to child processes and stop. Bash runs the trap only after
+# the current foreground command finishes, so this mainly stops the loop.
+# Not trapping EXIT, as signalling on normal exits (usage, errors) could
+# interrupt the calling shell when the script shares its process group.
 
 trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
   local func="$1"; shift
@@ -32,27 +33,27 @@ trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
 }
 
 stop() {
-  trap - SIGINT EXIT
+  trap - SIGINT SIGTERM SIGHUP
   printf '\nFunction stop(), part of trap handling in plot-nr-running_batch.sh: %s\n' "received $1, killing children"
-  kill -s SIGINT -- -$BASHPID
+  pkill -"$1" -P $$
+  exit 1
 }
 
-trap_with_arg 'stop' EXIT SIGINT SIGTERM SIGHUP
+trap_with_arg 'stop' SIGINT SIGTERM SIGHUP
 #}}}
 
 function usage_msg() {
-  printf "Usage: %s: --lscpu=LSCPU_FILE TRACE_FILE ... [TRACE_FILE] ...\n\n" "$0"
+  printf "Usage: %s [--lscpu=LSCPU_FILE] [--topdir=TOP_DIR] [--pattern=DIR_PATTERN] [--tracename=TRACE_NAME] [--new] [--dry] [--parallel=MAX_JOBS] [-v]\n\n" "$0"
   printf "Search for kernel trace reports with sched_update_nr_running events and process them with plot-nr-running.sh script.\n"
   printf "Example:\n%s --pattern=4.18.0-228.el8.bz1861444.test.cki.kt1 --parallel=4 --new --dry\n\n" "$0"
-  printf " TRACE_FILE [TRACE_FILE]- kernel trace files with sched_update_nr_running events (mandatory)\n"
   printf " --lscpu=LSCPU_FILE     - lscpu filename. Default: lscpu.txt\n"
   printf "                          Script expects that LSCPU_FILE has the same name in each processed directory.\n"
   printf " --topdir=TOP_DIR       - TOP_DIR is the top directory where find will start the search for kernel trace files.\n"
   printf "                          Default: current directory.\n"
   printf " --pattern=DIR_PATTERN  - Limit search to directories with this pattern: find TOP_DIR -name TRACE_NAME -wholename *DIR_PATTERN*\n"
   printf " --tracename=TRACE_NAME - find is searching for files with TRACE_NAME pattern: find TOP_DIR --name TRACE_NAME\n"
-  printf "                          The same pattern will be passed to plot-nr-running.sh script."
-  printf "                          Default: *.trace.xz"
+  printf "                          The same pattern will be passed to plot-nr-running.sh script.\n"
+  printf "                          Default: *.trace.xz\n"
   printf " --new                  - Process only new trace files, for which no png output exists.\n"
   printf "                          Replaces the last filename extension (suffix) after the dot with png.\n"
   printf "                          Example: For trace file 'report.trace.xz' it checks for 'report.trace.png'\n"
@@ -157,7 +158,7 @@ OK_DIR=()
 FAIL_DIR=()
 
 for DIR in "${FOUND_DIRS[@]}"; do
-  pushd "$DIR" >/dev/null || { FAIL_DIR+=("$DIR"); break; }
+  pushd "$DIR" >/dev/null || { FAIL_DIR+=("$DIR"); continue; }
   echo "Processing directory '$DIR'"
   mapfile -t FILES < <( "${LOCAL_FIND[@]}" )
 
@@ -209,4 +210,5 @@ if (( ${#FAIL_DIR[@]} > 0 )); then
   printf "\n"
 fi
 
-trap - EXIT SIGINT SIGTERM SIGHUP
+trap - SIGINT SIGTERM SIGHUP
+(( ${#FAIL_DIR[@]} == 0 ))

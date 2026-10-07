@@ -19,9 +19,10 @@
 LANG=C
 
 #{{{ trap - signal handling
-# Kill the whole process group, thus killing also descendants.
-# Specifying signal EXIT is useful when using set -e
-# See also http://stackoverflow.com/questions/360201/how-do-i-kill-background-processes-jobs-when-my-shell-script-exits
+# Pass the signal to child processes and stop. Bash runs the trap only after
+# the current foreground command finishes, so this mainly stops the loop.
+# Not trapping EXIT, as signalling on normal exits (usage, errors) could
+# interrupt the calling shell when the script shares its process group.
 
 trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
   local func="$1"; shift
@@ -31,13 +32,15 @@ trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
   done
 }
 
+# shellcheck disable=SC2329  # invoked through trap
 stop() {
-  trap - SIGINT EXIT
+  trap - SIGINT SIGTERM SIGHUP
   printf '\nFunction stop(), part of trap handling in plot-nr-running.sh: %s\n' "received $1, killing children"
-  kill -s SIGINT -- -$BASHPID
+  pkill -"$1" -P $$
+  exit 1
 }
 
-trap_with_arg 'stop' EXIT SIGINT SIGTERM SIGHUP
+trap_with_arg 'stop' SIGINT SIGTERM SIGHUP
 #}}}
 
 function usage_msg() {
@@ -63,6 +66,7 @@ argDry=0;
 argLscpu=""
 argParallel=0
 argParallelJobs=0
+failed=0
 ARGLIST=$(getopt -o 'h' --long 'lscpu:,dry,parallel:,help' -n "$0" -- "$@") || usage_msg
 eval set -- "${ARGLIST}"
 while true
@@ -98,7 +102,7 @@ if [[ "$argParallel" == "0" ]]; then
       printf "'%s' " "${COMMAND[@]}"
       echo
       printf "'%s' " "${COMMAND1[@]}"
-      printf " > '%s\n'" "$out_file1"
+      printf " > '%s'\n" "$out_file1"
       continue
     fi
 
@@ -106,6 +110,7 @@ if [[ "$argParallel" == "0" ]]; then
     ret_code=$?
 
     if [[ "$ret_code" -ne 0 ]]; then
+      failed=1
       echo "Failed to process ${file}. The command was:"
       printf "%s\n" "${COMMAND[*]}"
     fi
@@ -114,9 +119,10 @@ if [[ "$argParallel" == "0" ]]; then
     ret_code=$?
 
     if [[ "$ret_code" -ne 0 ]]; then
+      failed=1
       echo "Failed to process ${file}. The command was:"
       printf "%s" "${COMMAND1[*]}"
-      printf " > '%s\n'" "$out_file1"
+      printf " > '%s'\n" "$out_file1"
     fi
   done
 
@@ -128,12 +134,13 @@ else
   COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/check-nr-running.py" "--lscpu=$argLscpu" "{}" ">" "{.}.info" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
-  "${COMMAND[@]}"
+  "${COMMAND[@]}" || failed=1
 
   COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.py" "--lscpu=$argLscpu" "--image-file" "{.}.png" "{}" ">" "{.}.log" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
-  "${COMMAND[@]}"
+  "${COMMAND[@]}" || failed=1
 fi
 
-trap - EXIT SIGINT SIGTERM SIGHUP
+trap - SIGINT SIGTERM SIGHUP
+exit "$failed"
