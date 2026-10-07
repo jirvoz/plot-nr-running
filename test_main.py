@@ -1,8 +1,13 @@
+import contextlib
 import importlib.util
 import io
+import lzma
 import os
+import random
+import shutil
 import subprocess
 import sys
+from array import array
 
 import pytest
 
@@ -30,8 +35,12 @@ def load(script):
 
 
 def run(*args):
+    return run_command(sys.executable, *args)
+
+
+def run_command(*args, stdin=None, cwd=REPO):
     env = dict(os.environ, MPLBACKEND="Agg")
-    return subprocess.run([sys.executable] + list(args), env=env, cwd=REPO,
+    return subprocess.run(list(args), env=env, cwd=cwd, input=stdin,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
 
 
@@ -142,3 +151,176 @@ def test_plot_mpstat_12_hour_clock(tmp_path):
     assert values.tolist() == [[100.0, 0.0], [50.0, 0.0]]
     # Second block is past midnight
     assert time_axis.tolist() == [0.0, 1.0]
+
+
+def reference_replay(times, cpus, values, initial, sampling, time_sampling, threshold, duration):
+    """Straightforward per-event version of plot-nr-running replay_events."""
+    state = list(initial)
+    time_axis, states, imbalances = [], [], []
+    start = None
+    counter = 0
+    last = None
+    for t, cpu, value in zip(times, cpus, values):
+        state[cpu] = value
+        diff = max(state) - min(state)
+        if diff >= threshold and start is None:
+            start = t
+        if diff < threshold and start is not None:
+            if t - start >= duration:
+                imbalances.append([(start, threshold), (t, threshold)])
+            start = None
+        counter += 1
+        if counter >= sampling:
+            counter = 0
+            if not time_sampling or last is None or t - last >= 1.0 / time_sampling:
+                time_axis.append(t)
+                states.append(list(state))
+                last = t
+    if start is not None and times[-1] - start >= duration:
+        imbalances.append([(start, threshold), (times[-1], threshold)])
+    return time_axis, states, imbalances
+
+
+def test_replay_matches_reference():
+    plot = load("plot-nr-running.py")
+    # Smallest chunks, so that traces span several of them
+    plot.REPLAY_CHUNK_CELLS = 1
+    rng = random.Random(1)
+    for trial in range(40):
+        cpus_count = rng.randint(1, 9)
+        events = rng.randint(1, 3000)
+        times = sorted(rng.uniform(0, 5) for _ in range(events))
+        cpus = [rng.randrange(cpus_count) for _ in range(events)]
+        values = [rng.randint(0, 5) for _ in range(events)]
+        initial = [rng.randint(0, 3) for _ in range(cpus_count)]
+        args = (rng.choice([1, 1, 2, 7]), rng.choice([0, 0, 3, 50]), rng.randint(1, 4), rng.choice([0, 0.05, 0.3]))
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            time_axis, states, differences, sums, imbalances = plot.replay_events(
+                array('d', times), array('i', cpus), array('i', values), initial, *args)
+        expected_time_axis, expected_states, expected_imbalances = reference_replay(
+            times, cpus, values, initial, *args)
+
+        assert time_axis.tolist() == expected_time_axis, trial
+        assert states.tolist() == expected_states, trial
+        assert differences.tolist() == [max(s) - min(s) for s in expected_states], trial
+        assert sums.tolist() == [sum(s) for s in expected_states], trial
+        assert imbalances == expected_imbalances, trial
+
+
+def test_sampling_does_not_change_imbalances():
+    plot = load("plot-nr-running.py")
+    with lzma.open(EXAMPLE_TRACE, "rt") as trace, contextlib.redirect_stdout(io.StringIO()):
+        events = plot.read_events(trace)
+    results = {}
+    for sampling, time_sampling in ((1, 0), (7, 0), (1, 10), (5, 100)):
+        with contextlib.redirect_stdout(io.StringIO()):
+            time_axis, _, _, _, imbalances = plot.replay_events(*events, sampling, time_sampling, 2, 0.05)
+        results[sampling, time_sampling] = (len(time_axis), imbalances)
+
+    full_count, full_imbalances = results[1, 0]
+    assert full_imbalances
+    for (sampling, time_sampling), (count, imbalances) in results.items():
+        assert imbalances == full_imbalances, (sampling, time_sampling)
+        if (sampling, time_sampling) != (1, 0):
+            assert count < full_count
+
+
+# Kernel recording the change unsigned: decrements show up as change=1.
+# The last event is a real gap, nr_running of CPU 0 jumps from 0 to 2.
+UNSIGNED_TRACE = """\
+cpus=2
+ a-1 [000] 1.000000: sched_update_nr_running: cpu=0 change=1 nr_running=0
+ a-1 [000] 2.000000: sched_update_nr_running: cpu=0 change=1 nr_running=1
+ a-1 [001] 3.000000: sched_update_nr_running: cpu=1 change=1 nr_running=1
+ a-1 [001] 4.000000: sched_update_nr_running: cpu=1 change=1 nr_running=0
+ a-1 [000] 5.000000: sched_update_nr_running: cpu=0 change=1 nr_running=0
+ a-1 [000] 6.000000: sched_update_nr_running: cpu=0 change=1 nr_running=2
+"""
+
+
+def test_unsigned_change(tmp_path):
+    trace = tmp_path / "unsigned.trace"
+    trace.write_text(UNSIGNED_TRACE)
+
+    plot = load("plot-nr-running.py")
+    output = io.StringIO()
+    with open(str(trace)) as f, contextlib.redirect_stdout(output):
+        _, _, _, initial = plot.read_events(f)
+    # The first event of CPU 0 is a decrement to 0
+    assert initial == [1, 0]
+    assert "NOTE: No negative 'change' values found" in output.getvalue()
+
+    complete = run("check-nr-running.py", str(trace))
+    assert complete.returncode == 0, complete.stdout
+    assert "NOTE: No negative 'change' values found" in complete.stdout
+    # Only the real gap is reported, not the unsigned decrements
+    assert "Detected missed event number 1 " in complete.stdout
+    assert "Detected missed event number 2 " not in complete.stdout
+
+
+def test_signed_change_has_no_note(small_trace, tmp_path):
+    complete = run("plot-nr-running.py", "--image-file", str(tmp_path / "small.png"), small_trace)
+    assert "NOTE" not in complete.stdout
+    complete = run("check-nr-running.py", small_trace)
+    assert "NOTE" not in complete.stdout
+
+
+@pytest.fixture
+def traces_dir(tmp_path):
+    shutil.copy(EXAMPLE_LSCPU, str(tmp_path / "lscpu.txt"))
+    (tmp_path / "good one.trace").write_text(SMALL_TRACE)
+    (tmp_path / "bad.trace").write_text("garbage\n")
+    return tmp_path
+
+
+WRAPPER_MODES = [
+    pytest.param([], id="sequential"),
+    pytest.param(["--parallel=2"], id="parallel", marks=pytest.mark.skipif(
+        shutil.which("parallel") is None, reason="GNU parallel is not installed")),
+]
+
+
+@pytest.mark.parametrize("mode", WRAPPER_MODES)
+def test_wrapper_exit_codes(traces_dir, mode):
+    wrapper = os.path.join(REPO, "plot-nr-running.sh")
+    good = str(traces_dir / "good one.trace")
+    bad = str(traces_dir / "bad.trace")
+
+    complete = run_command(wrapper, "--lscpu=lscpu.txt", *mode, good, cwd=str(traces_dir))
+    assert complete.returncode == 0, complete.stdout
+    assert (traces_dir / "good one.png").stat().st_size > 0
+    assert "| CPU | Runtime (s) |" in (traces_dir / "good one.info").read_text()
+
+    complete = run_command(wrapper, "--lscpu=lscpu.txt", *mode, good, bad, cwd=str(traces_dir))
+    assert complete.returncode == 1, complete.stdout
+
+
+@pytest.mark.parametrize("mode", WRAPPER_MODES)
+def test_wrapper_dry_run(traces_dir, mode):
+    before = sorted(os.listdir(str(traces_dir)))
+    complete = run_command(os.path.join(REPO, "plot-nr-running.sh"), "--dry", "--lscpu=lscpu.txt", *mode,
+                           str(traces_dir / "good one.trace"), cwd=str(traces_dir))
+    assert complete.returncode == 0, complete.stdout
+    assert sorted(os.listdir(str(traces_dir))) == before
+    # Each command is printed once
+    commands = [line.lstrip("'") for line in complete.stdout.splitlines()]
+    for script in ("plot-nr-running.py", "check-nr-running.py"):
+        assert sum(line.startswith(os.path.join(REPO, script)) for line in commands) == 1, complete.stdout
+
+
+@pytest.mark.parametrize("mode", WRAPPER_MODES)
+def test_batch_reports_failed_directory(tmp_path, mode):
+    for directory, content in (("a_good", SMALL_TRACE), ("b_bad", "garbage\n"), ("c_good", SMALL_TRACE)):
+        (tmp_path / directory).mkdir()
+        (tmp_path / directory / "x.trace").write_text(content)
+        shutil.copy(EXAMPLE_LSCPU, str(tmp_path / directory / "lscpu.txt"))
+
+    complete = run_command(os.path.join(REPO, "plot-nr-running_batch.sh"), "--tracename=*.trace", *mode,
+                           stdin="y\ny\n", cwd=str(tmp_path))
+    assert complete.returncode == 1, complete.stdout
+    failed = complete.stdout.split("Error when processing trace files from following directories:")[1]
+    assert "b_bad" in failed and "a_good" not in failed and "c_good" not in failed
+    # Directories after the failed one are processed too
+    assert (tmp_path / "a_good" / "x.png").exists()
+    assert (tmp_path / "c_good" / "x.png").exists()
