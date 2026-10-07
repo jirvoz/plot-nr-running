@@ -11,289 +11,271 @@ import numpy as np
 # import matplotlib
 # matplotlib.use('agg')  # In case of missing tkinter
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap, BoundaryNorm
-from matplotlib import collections as mc
 from matplotlib.ticker import MultipleLocator
 
-def draw_reports(cpu_values, time_axis, file_names, image_file=None, numa_cpus={}):
+# See plot-nr-running.py: one tick per CPU can exceed matplotlib's tick limit
+MINOR_TICK_CPU_LIMIT = 256
+
+# Above this many CPUs, labelling every CPU row makes the labels overlap.
+CPU_LABEL_LIMIT = 64
+
+HEADER_RE = re.compile(r"\)\s+(\S+)\s+_\S+_\s+\((\d+) CPU\)")
+# Date formats used by sysstat in C, en_US and ISO (S_TIME_FORMAT=ISO) locales
+DATE_FORMATS = ("%m/%d/%y", "%m/%d/%Y", "%Y-%m-%d")
+
+
+def cpu_layout(numa_cpus, cpus_count):
+    """Return the heat map row order of CPUs and (first_row, label) of each NUMA node.
+
+    CPUs missing from the lscpu file are kept in a trailing group, so a
+    mismatched lscpu file neither crashes the plot nor hides data.
+    """
+    if not numa_cpus:
+        return list(range(cpus_count)), []
+
+    order = []
+    nodes = []
+    for node, cpus in numa_cpus.items():
+        cpus = [cpu for cpu in cpus if cpu < cpus_count]
+        if cpus:
+            nodes.append((len(order), "Node " + str(node)))
+            order += cpus
+
+    listed = set(order)
+    missing = [cpu for cpu in range(cpus_count) if cpu not in listed]
+    if missing:
+        nodes.append((len(order), "Unknown"))
+        order += missing
+
+    return order, nodes
+
+
+def time_edges(time_axis):
+    # Each mpstat block starts with a header holding the start time of its
+    # measurement interval, the values are averages over that interval
+    interval = np.median(np.diff(time_axis)) if len(time_axis) > 1 else 1.0
+    return np.append(time_axis, time_axis[-1] + interval)
+
+
+def draw_cpu_heatmap(ax, time_axis, values, title, numa_cpus=None):
+    order, nodes = cpu_layout(numa_cpus, values.shape[1])
+    edges = time_edges(time_axis)
+    mesh = ax.pcolormesh(edges, np.arange(len(order) + 1), values[:, order].transpose(),
+                         vmin=0.0, vmax=100.0, cmap='Reds', shading='flat', rasterized=True)
+
+    ax.set_xlim(edges[0], edges[-1])
+    ax.set_ylim(0, len(order))
+
+    ax.set_title(title)
+    ax.set_xlabel("Time in seconds")
+
+    # Separate CPUs with lines by NUMA nodes
+    if nodes:
+        ax.grid(True, which='major', axis='y', linestyle='--', color='k')
+        ax.set_yticks([first for first, _ in nodes])
+        ax.set_yticklabels([label for _, label in nodes])
+        if len(order) <= MINOR_TICK_CPU_LIMIT:
+            ax.yaxis.set_minor_locator(MultipleLocator(1))
+        ax.set_ylabel("CPUs (grouped by NUMA nodes)")
+    else:
+        ax.set_ylabel("CPUs")
+        if len(order) <= CPU_LABEL_LIMIT:
+            ax.set_yticks(np.arange(len(order)) + 0.5)
+            ax.set_yticklabels(order)
+
+    return mesh
+
+
+def draw_node_heatmap(ax, time_axis, values, title):
+    edges = time_edges(time_axis)
+    nodes_count = values.shape[1]
+    mesh = ax.pcolormesh(edges, np.arange(nodes_count + 1), values.transpose(),
+                         vmin=0.0, vmax=100.0, cmap='Reds', shading='flat', rasterized=True)
+
+    ax.set_xlim(edges[0], edges[-1])
+    ax.set_ylim(0, nodes_count)
+
+    ax.set_title(title)
+    ax.set_xlabel("Time in seconds")
+    ax.set_ylabel("Nodes")
+    ax.set_yticks(np.arange(nodes_count) + 0.5)
+    ax.set_yticklabels(range(nodes_count))
+
+    return mesh
+
+
+def finish_figure(fig, mesh, image_file):
+    fig.subplots_adjust(right=0.88)
+    cbar = fig.colorbar(mesh, cax=fig.add_axes((0.91, 0.1, 0.02, 0.8)))
+    cbar.ax.set_ylabel("CPU utilization (%)")
+
+    if image_file:
+        fig.savefig(image_file)
+    else:
+        plt.show()
+
+    plt.close(fig)
+
+
+def draw_reports(cpu_values, time_axis, file_names, image_file=None, numa_cpus=None):
     cols = int(np.ceil(np.sqrt(len(cpu_values))))
     rows = int(np.ceil(len(cpu_values) / cols))
-    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8))
+    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8), squeeze=False)
 
     for i, vmap in enumerate(cpu_values):
-        if len(cpu_values) > 1:
-            ax = axs.flat[i]
-        else:
-            ax = axs
-        plt.sca(ax)
+        mesh = draw_cpu_heatmap(axs.flat[i], time_axis[i], vmap,
+                                "mpstat heatmap for file '" + file_names[i] + "'", numa_cpus)
 
-        # Transpose heat map data to right axes
-        vmap = np.array(vmap)[:-1, :].transpose()
+    for ax in axs.flat[len(cpu_values):]:
+        ax.set_visible(False)
 
-        # Group CPU lines by NUMA nodes
-        if numa_cpus:
-            new_order = []
-            for k, v in numa_cpus.items():
-                new_order += v
-            vmap = vmap[new_order]
-
-        # Add blank row to correctly plot all rows with data
-        vmap = np.vstack((vmap, np.zeros(vmap.shape[1])))
-
-        # Draw the main heat map
-        x_grid, y_grid = np.meshgrid(time_axis[i], range(len(vmap)))
-        mesh = ax.pcolormesh(x_grid, y_grid, vmap, vmin=0.0, vmax=100.0, cmap='Reds')
-
-        ax.set_xlim(time_axis[i][0], time_axis[i][-1])
-        ax.set_ylim([0, vmap.shape[0] - 1])
-
-        ax.set_title("mpstat heatmap for file '" + file_names[i] + "'")
-        ax.set_xlabel("Time in seconds")
-
-        # Separate CPUs with lines by NUMA nodes
-        if numa_cpus:
-            ax.grid(True, which='major', axis='y', linestyle='--', color='k')
-            plt.yticks(range(0, vmap.shape[0] - 1, len(numa_cpus[0])),
-                    map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
-            ax.yaxis.set_minor_locator(MultipleLocator(1))
-            ax.set_ylabel("CPUs (grouped by NUMA nodes)")
-        else:
-            ax.set_ylabel("CPUs")
-            plt.yticks(range(vmap.shape[0]))
-
-    #plt.subplots_adjust(left=0.05, right=0.90, top=0.95, bottom=0.1)
-
-    cbar = fig.colorbar(mesh, cax=plt.axes((0.95, 0.1, 0.02, 0.85)), cmap='Reds')
-    cbar.ax.set_ylabel("CPU utilization (%)")
-
-    if image_file:
-        plt.savefig(image_file)
-    else:
-        plt.show()
-
-    plt.close()
+    finish_figure(fig, mesh, image_file)
 
 
-def draw_dual_reports(cpu_values, numa_values, time_axis, file_names, image_file=None, numa_cpus={}):
+def draw_dual_reports(cpu_values, numa_values, time_axis, file_names, image_file=None, numa_cpus=None):
     cols = int(np.ceil(np.sqrt(len(cpu_values))))
     rows = int(np.ceil(len(cpu_values) / cols)) * 2
-    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8))
+    fig, axs = plt.subplots(nrows=rows, ncols=cols, figsize=(cols * 10, rows * 8), squeeze=False)
 
-    for i in range(rows // 2):
-        for j in range(cols):
-            if j + i * cols >= len(cpu_values):
-                break
-            # CPU graph
-            ax = axs.flat[j + i * cols * 2]
-            plt.sca(ax)
+    for k in range(len(cpu_values)):
+        # CPU graph with consequent NUMA graph below it
+        i, j = divmod(k, cols)
+        draw_cpu_heatmap(axs[2 * i, j], time_axis[k], cpu_values[k],
+                         "CPU mpstat heatmap for file '" + file_names[k] + "'", numa_cpus)
+        mesh = draw_node_heatmap(axs[2 * i + 1, j], time_axis[k], numa_values[k],
+                                 "NUMA mpstat heatmap for file '" + file_names[k] + "'")
 
-            # Transpose heat map data to right axes
-            cpu_values[j + i * cols] = np.array(cpu_values[j + i * cols])[:-1, :].transpose()
+    for k in range(len(cpu_values), rows // 2 * cols):
+        i, j = divmod(k, cols)
+        axs[2 * i, j].set_visible(False)
+        axs[2 * i + 1, j].set_visible(False)
 
-            # Group CPU lines by NUMA nodes
-            if numa_cpus:
-                new_order = []
-                for k, v in numa_cpus.items():
-                    new_order += v
-                cpu_values[j + i * cols] = cpu_values[j + i * cols][new_order]
-
-            # Add blank row to correctly plot all rows with data
-            cpu_values[j + i * cols] = np.vstack((cpu_values[j + i * cols], np.zeros(cpu_values[j + i * cols].shape[1])))
-
-            # Draw the main heat map
-            x_grid, y_grid = np.meshgrid(time_axis[j + i * cols], range(len(cpu_values[j + i * cols])))
-            mesh = ax.pcolormesh(x_grid, y_grid, cpu_values[j + i * cols], vmin=0.0, vmax=100.0, cmap='Reds')
-
-            ax.set_xlim(time_axis[j + i * cols][0], time_axis[j + i * cols][-1])
-            ax.set_ylim([0, cpu_values[j + i * cols].shape[0] - 1])
-
-            ax.set_title("CPU mpstat heatmap for file '" + file_names[j + i * cols] + "'")
-            ax.set_xlabel("Time in seconds")
-
-            # Separate CPUs with lines by NUMA nodes
-            if numa_cpus:
-                ax.grid(True, which='major', axis='y', linestyle='--', color='k')
-                plt.yticks(range(0, cpu_values[j + i * cols].shape[0] - 1, len(numa_cpus[0])),
-                        map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
-                ax.yaxis.set_minor_locator(MultipleLocator(1))
-                ax.set_ylabel("CPUs (grouped by NUMA nodes)")
-            else:
-                ax.set_ylabel("CPUs")
-                plt.yticks(range(cpu_values[j + i * cols].shape[0]))
-
-            # NUMA graph
-            ax = axs.flat[j + i * cols * 2 + cols]
-            plt.sca(ax)
-
-            # Transpose heat map data to right axes
-            numa_values[j + i * cols] = np.array(numa_values[j + i * cols])[:-1, :].transpose()
-
-            # Add blank row to correctly plot all rows with data
-            numa_values[j + i * cols] = np.vstack((numa_values[j + i * cols], np.zeros(numa_values[j + i * cols].shape[1])))
-
-            # Draw the main heat map
-            x_grid, y_grid = np.meshgrid(time_axis[j + i * cols], range(len(numa_values[j + i * cols])))
-            mesh = ax.pcolormesh(x_grid, y_grid, numa_values[j + i * cols], vmin=0.0, vmax=100.0, cmap='Reds')
-
-            ax.set_xlim(time_axis[j + i * cols][0], time_axis[j + i * cols][-1])
-            ax.set_ylim([0, numa_values[j + i * cols].shape[0] - 1])
-
-            ax.set_title("NUMA mpstat heatmap for file '" + file_names[j + i * cols] + "'")
-            ax.set_xlabel("Time in seconds")
-
-            ax.set_ylabel("Nodes")
-            plt.yticks(range(numa_values[j + i * cols].shape[0]))
-
-    #plt.subplots_adjust(left=0.05, right=0.90, top=0.95, bottom=0.1)
-
-    cbar = fig.colorbar(mesh, cax=plt.axes((0.95, 0.1, 0.02, 0.85)), cmap='Reds')
-    cbar.ax.set_ylabel("CPU utilization (%)")
-
-    if image_file:
-        plt.savefig(image_file)
-    else:
-        plt.show()
-
-    plt.close()
+    finish_figure(fig, mesh, image_file)
 
 
 def read_nodes(lscpu_file):
+    """Return {node: [cpu, ...]} parsed from lscpu output, in lscpu order."""
     numa_cpus = {}
-    NUMA_re=re.compile(r'NUMA.*CPU\(s\):')
+    numa_re = re.compile(r'NUMA node(\d+) CPU\(s\):\s*(\S*)')
     for line in lscpu_file:
-        # Find number of CPUs and NUMA nodes:
-        if line[:7] == 'CPU(s):':
-            cpu_nb = int(line[7:])
-        elif line[:13] == 'NUMA node(s):':
-            nodes_nb = int(line[13:])
-
-        # Find NUMA nodes associated with CPUs:
-        elif NUMA_re.search(line):
-            words = line.split()
-            cpus = words[-1].split(',')
-            for cpu in cpus:
-                if '-' in cpu:
-                    w = cpu.split('-')
-                    for i in range(int(w[0]), int(w[1]) + 1):
-                        numa_cpus.setdefault(int(words[1][4:]), []).append(i)
-                else:
-                    numa_cpus.setdefault(int(words[1][4:]), []).append(int(cpu))
+        match = numa_re.search(line)
+        if not match:
+            continue
+        cpus = []
+        # Memory-only nodes (CXL, HBM, ...) have an empty CPU list
+        for cpu_range in filter(None, match.group(2).split(',')):
+            first, _, last = cpu_range.partition('-')
+            cpus.extend(range(int(first), int(last or first) + 1))
+        if cpus:
+            numa_cpus[int(match.group(1))] = cpus
 
     return numa_cpus
 
 
-def process_report(input_file, time_offset=0.0):
-    cpus_count = 0
-    time_axis = []
-    cpu_values = []
-    differences = []
-    imbalances = []
+def read_header(input_file):
+    """Return (start date, CPUs count) from the mpstat header, or None."""
+    for line in input_file:
+        # Skip comments and empty lines before the header
+        if line.startswith('#') or not line.strip():
+            continue
+        match = HEADER_RE.search(line)
+        if not match:
+            break
+        for date_format in DATE_FORMATS:
+            try:
+                return datetime.strptime(match.group(1), date_format).date(), int(match.group(2))
+            except ValueError:
+                pass
+        break
 
-    # Get CPUs count and start date
-    reg_exp=re.compile(r".*\)\s+(\d+/\d+/\d+)\s+_.*\((\d+) CPU\).*")
+    print("Wrong mpstat header in file '{}'".format(input_file.name))
+    return None
 
-    line = input_file.readline()  # read first data line
-    match = reg_exp.findall(line)
-    if not match:
-        print("Wrong mpstat header")
-        exit(1)
 
-    start_date = datetime.strptime(match[0][0], "%m/%d/%y").date()
-    cpus_count = int(match[0][1])
+def parse_time(data):
+    """Return time of mpstat line and its remaining fields, for both 24 and 12-hour clock."""
+    if len(data) > 1 and data[1] in ("AM", "PM"):
+        return datetime.strptime(data[0] + " " + data[1], "%I:%M:%S %p").time(), data[2:]
+    return datetime.strptime(data[0], "%H:%M:%S").time(), data[1:]
 
-    input_file.readline()  # skip first empty line
-    data = input_file.readline().split()  # read first data line
 
-    if time_offset:
-        curr_time = datetime.combine(start_date,
-            datetime.strptime(data[0], "%H:%M:%S").time())
-    else:
-        curr_time = datetime.combine(start_date,
-            datetime.strptime(data[0], "%H:%M:%S").time())
-        time_offset = curr_time.timestamp()
+def read_blocks(input_file, start_date, measuretype):
+    """Yield (time, rows) for each measurement in mpstat output.
 
-    time_axis = []
-    row = np.zeros(cpus_count)
-
+    Each row holds the fields after the time column, starting with the CPU
+    or node number.
+    """
+    curr_time = None
+    rows = []
     for line in input_file:
         data = line.split()
         if not data:
-            cpu_values.append(row)
-            time_axis.append(curr_time.timestamp() - time_offset)
-            row = np.zeros(cpus_count)
+            if rows:
+                yield curr_time, rows
+                rows = []
             continue
         if data[0] == "Average:":
             break  # end of file
-        if data[1] == "CPU":  # Time when measure started
-            last_time = curr_time
-            curr_time = datetime.combine(start_date,
-                datetime.strptime(data[0], "%H:%M:%S").time())
-            if curr_time.hour < last_time.hour:
+        line_time, fields = parse_time(data)
+        if fields[0] == measuretype:  # Time when measure started
+            timestamp = datetime.combine(start_date, line_time)
+            if curr_time is not None and timestamp < curr_time:
+                # Measurement continues past midnight
                 start_date += timedelta(days=1)
-                curr_time += timedelta(days=1)
+                timestamp += timedelta(days=1)
+            curr_time = timestamp
             continue
-        if data[1] == "all":
+        if fields[0] == "all":
             continue
-        row[int(data[1])] = float(data[2]) + float(data[4])  # usr + sys values
+        rows.append(fields)
 
-    return cpu_values, time_axis
+    if rows:
+        yield curr_time, rows
+
+
+def process_report(input_file, time_offset=0.0):
+    header = read_header(input_file)
+    if header is None:
+        return None
+    start_date, cpus_count = header
+
+    time_axis = []
+    cpu_values = []
+    for curr_time, rows in read_blocks(input_file, start_date, "CPU"):
+        if not time_offset:
+            time_offset = curr_time.timestamp()
+        row = np.zeros(cpus_count)
+        for fields in rows:
+            row[int(fields[0])] = float(fields[1]) + float(fields[3])  # usr + sys values
+        cpu_values.append(row)
+        time_axis.append(curr_time.timestamp() - time_offset)
+
+    if not cpu_values:
+        print("No mpstat data in file '{}'".format(input_file.name))
+        return None
+
+    return np.array(cpu_values), np.array(time_axis)
 
 
 def process_dual_report(input_file, time_offset=0.0, measuretype="CPU"):
-    cpus_count = 0
-    time_axis = []
-    cpu_values = []
-    differences = []
-    imbalances = []
-
-    # Get CPUs count and start date
-    reg_exp=re.compile(r".*\)\s+(\d+/\d+/\d+)\s+_.*\((\d+) CPU\).*")
-
-    line = input_file.readline()  # read first data line
-    match = reg_exp.findall(line)
-    if not match:
-        print("Wrong mpstat header")
-        exit(1)
-
-    start_date = datetime.strptime(match[0][0], "%m/%d/%y").date()
-
-    input_file.readline()  # skip first empty line
-    data = input_file.readline().split()  # read first data line
-
-    if time_offset:
-        curr_time = datetime.combine(start_date,
-            datetime.strptime(data[0], "%H:%M:%S").time())
-    else:
-        curr_time = datetime.combine(start_date,
-            datetime.strptime(data[0], "%H:%M:%S").time())
-        time_offset = curr_time.timestamp()
+    header = read_header(input_file)
+    if header is None:
+        return None
+    start_date = header[0]
 
     time_axis = []
-    row = []
+    values = []
+    for curr_time, rows in read_blocks(input_file, start_date, measuretype):
+        if not time_offset:
+            time_offset = curr_time.timestamp()
+        values.append([float(fields[1]) + float(fields[3]) for fields in rows])  # usr + sys values
+        time_axis.append(curr_time.timestamp() - time_offset)
 
-    for line in input_file:
-        data = line.split()
-        if not data:
-            if row:
-                cpu_values.append(row)
-                time_axis.append(curr_time.timestamp() - time_offset)
-                row = []
-            continue
-        if data[0] == "Average:":
-            break  # end of file
-        if data[1] == measuretype:  # Time when measure started
-            last_time = curr_time
-            curr_time = datetime.combine(start_date,
-                datetime.strptime(data[0], "%H:%M:%S").time())
-            if curr_time.hour < last_time.hour:
-                start_date += timedelta(days=1)
-                curr_time += timedelta(days=1)
-            continue
-        if data[1] == "all":
-            continue
-        row.append(float(data[2]) + float(data[4]))  # usr + sys values
+    if not values:
+        print("No mpstat data in file '{}'".format(input_file.name))
+        return None
 
-    return cpu_values, time_axis
+    return np.array(values), np.array(time_axis)
 
 
 def create_multiple(input_files, lscpu_file):
@@ -305,9 +287,14 @@ def create_multiple(input_files, lscpu_file):
     time_axis = {}
     file_names = {}
 
+    failed = False
     for f in input_files:
         key = f.name.rpartition("loop")[0].rstrip(".")
-        mv, ta = process_report(f, 0)
+        report = process_report(f, 0)
+        if report is None:
+            failed = True
+            continue
+        mv, ta = report
         cpu_values.setdefault(key, []).append(mv)
         time_axis.setdefault(key, []).append(ta)
         file_names.setdefault(key, []).append(os.path.basename(f.name))
@@ -316,6 +303,8 @@ def create_multiple(input_files, lscpu_file):
         print("Drawing " + key)
         draw_reports(cpu_values[key], time_axis[key], file_names[key],
                      key + ".png", numa_cpus)
+
+    return not failed
 
 
 if __name__ == '__main__':
@@ -341,8 +330,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     if args.multiple:
-        create_multiple(args.input_file, args.lscpu_file)
-        sys.exit()
+        sys.exit(0 if create_multiple(args.input_file, args.lscpu_file) else 1)
 
     numa_cpus = {}
     if args.lscpu_file:
@@ -352,24 +340,36 @@ if __name__ == '__main__':
     numa_values = []
     time_axis = []
     file_names = []
+    failed = False
 
     if not args.dual:
         for f in args.input_file:
-            mv, ta = process_report(f, args.time_offset)
+            report = process_report(f, args.time_offset)
+            if report is None:
+                failed = True
+                continue
+            mv, ta = report
             cpu_values.append(mv)
             time_axis.append(ta)
             file_names.append(os.path.basename(f.name))
 
-        draw_reports(cpu_values, time_axis, file_names, args.image_file, numa_cpus)
+        if cpu_values:
+            draw_reports(cpu_values, time_axis, file_names, args.image_file, numa_cpus)
     else:
         if len(args.input_file) % 2 != 0:
             print("Number of files for dual graphs must be even.")
             sys.exit(1)
 
         for i in range(len(args.input_file) // 2):
-            cpu_v, ta = process_dual_report(args.input_file[i], args.time_offset, "CPU")
-            numa_v, ta2 = process_dual_report(args.input_file[i + len(args.input_file) // 2], args.time_offset, "NODE")
+            cpu_report = process_dual_report(args.input_file[i], args.time_offset, "CPU")
+            numa_report = process_dual_report(args.input_file[i + len(args.input_file) // 2], args.time_offset, "NODE")
+            if cpu_report is None or numa_report is None:
+                failed = True
+                continue
+            cpu_v, ta = cpu_report
+            numa_v, ta2 = numa_report
             if len(ta) != len(ta2):
+                failed = True
                 print("Files", args.input_file[i], "and", args.input_file[i + len(args.input_file) // 2],
                       "have different number of records.")
                 continue
@@ -378,4 +378,7 @@ if __name__ == '__main__':
             time_axis.append(ta)
             file_names.append(os.path.basename(args.input_file[i].name))
 
-        draw_dual_reports(cpu_values, numa_values, time_axis, file_names, args.image_file, numa_cpus)
+        if cpu_values:
+            draw_dual_reports(cpu_values, numa_values, time_axis, file_names, args.image_file, numa_cpus)
+
+    sys.exit(1 if failed or not cpu_values else 0)
