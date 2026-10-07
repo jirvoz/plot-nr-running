@@ -21,8 +21,10 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import argparse
+import lzma
 import sys
 import re
+from array import array
 
 import numpy as np
 # import matplotlib
@@ -39,22 +41,107 @@ from matplotlib.ticker import MultipleLocator
 # per-NUMA-node major ticks.
 MINOR_TICK_CPU_LIMIT = 256
 
+# Above this many CPUs, labelling every CPU row makes the labels overlap.
+CPU_LABEL_LIMIT = 64
 
-def draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus=None):
-    if numa_cpus is None:
-        numa_cpus = {}
-    # Transpose heat map data to right axes
-    map_values = np.array(map_values)[:-1, :].transpose()
+# Number of heat map cells (events x CPUs) replayed at once. Bounds the
+# memory used while reconstructing per-CPU state from the events.
+REPLAY_CHUNK_CELLS = 1 << 22
 
-    # Group CPU lines by NUMA nodes
-    if numa_cpus:
-        new_order = []
-        for k, v in numa_cpus.items():
-            new_order += v
-        map_values = map_values[new_order]
+HEADER_RE = re.compile(r"^cpus=(\d+)$")
+EVENT_RE = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
 
-    # Add blank row to correctly plot all rows with data
-    map_values = np.vstack((map_values, np.zeros(map_values.shape[1])))
+
+def read_nodes(lscpu_file):
+    """Return {node: [cpu, ...]} parsed from lscpu output, in lscpu order."""
+    numa_cpus = {}
+    numa_re = re.compile(r'NUMA node(\d+) CPU\(s\):\s*(\S*)')
+    for line in lscpu_file:
+        match = numa_re.search(line)
+        if not match:
+            continue
+        cpus = []
+        # Memory-only nodes (CXL, HBM, ...) have an empty CPU list
+        for cpu_range in filter(None, match.group(2).split(',')):
+            first, _, last = cpu_range.partition('-')
+            cpus.extend(range(int(first), int(last or first) + 1))
+        if cpus:
+            numa_cpus[int(match.group(1))] = cpus
+
+    return numa_cpus
+
+
+def cpu_layout(numa_cpus, cpus_count):
+    """Return the heat map row order of CPUs and (first_row, label) of each NUMA node.
+
+    CPUs missing from the lscpu file are kept in a trailing group, so a
+    mismatched lscpu file neither crashes the plot nor hides data.
+    """
+    if not numa_cpus:
+        return list(range(cpus_count)), []
+
+    order = []
+    nodes = []
+    for node, cpus in numa_cpus.items():
+        cpus = [cpu for cpu in cpus if cpu < cpus_count]
+        if cpus:
+            nodes.append((len(order), "Node " + str(node)))
+            order += cpus
+
+    listed = set(order)
+    missing = [cpu for cpu in range(cpus_count) if cpu not in listed]
+    if len(listed) != sum(len(cpus) for cpus in numa_cpus.values()) or missing:
+        print("WARNING: CPUs in lscpu file do not match the {} CPUs in the trace.".format(cpus_count))
+    if missing:
+        nodes.append((len(order), "Unknown"))
+        order += missing
+
+    return order, nodes
+
+
+def draw_heatmap(ax, time_edges, states, cmap, norm, numa_cpus=None):
+    """Draw per-CPU states (samples x CPUs) as a heat map, one row per CPU.
+
+    time_edges has one more item than states has rows: sample i is drawn
+    from time_edges[i] until the next sample.
+    """
+    order, nodes = cpu_layout(numa_cpus, states.shape[1])
+    mesh = ax.pcolormesh(
+        time_edges,
+        np.arange(len(order) + 1),
+        states[:, order].transpose(),
+        cmap=cmap,
+        norm=norm,
+        shading='flat',
+        rasterized=True,
+    )
+
+    ax.set_xlim(time_edges[0], time_edges[-1])
+    ax.set_ylim(0, len(order))
+
+    # Separate CPUs with lines by NUMA nodes
+    if nodes:
+        ax.set_yticks([first for first, _ in nodes])
+        ax.set_yticklabels([label for _, label in nodes])
+        ax.grid(True, which='major', axis='y', linestyle='--', color='w')
+        if len(order) <= MINOR_TICK_CPU_LIMIT:
+            ax.yaxis.set_minor_locator(MultipleLocator(1))
+    elif len(order) <= CPU_LABEL_LIMIT:
+        ax.set_yticks(np.arange(len(order)) + 0.5)
+        ax.set_yticklabels(order)
+
+    return mesh
+
+
+def draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file=None, numa_cpus=None,
+                end_time=None):
+    if end_time is None:
+        end_time = time_axis[-1]
+    # The last sample lasts until the end of trace. A trace with a single
+    # event gets a nominal width to keep the plot visible.
+    time_edges = np.append(time_axis, max(end_time, time_axis[-1]))
+    if time_edges[-1] == time_edges[0]:
+        time_edges[-1] += 1e-3
 
     cmap = ListedColormap(['#000000', '#305090', '#40b080', '#f0e020', '#f04010'])
     boundaries = [-0.5, 0.5, 1.5, 2.5, 3.5, 4.5]
@@ -65,29 +152,17 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     fig.subplots_adjust(hspace=0.05)
 
     # Draw the main heat map
-    x_grid, y_grid = np.meshgrid(time_axis, range(len(map_values)))
-    mesh = axs[0].pcolormesh(
-        x_grid,
-        y_grid,
-        map_values,
-        cmap=cmap,
-        norm=norm,
-        shading='nearest',
-        rasterized=True,
-    )
-
-    axs[0].set_xlim(time_axis[0], time_axis[-1])
-    axs[0].set_ylim([0, map_values.shape[0] - 1])
+    mesh = draw_heatmap(axs[0], time_edges, np.asarray(map_values), cmap, norm, numa_cpus)
 
     # Create colorbar
-    cbar = fig.colorbar(mesh, cax=plt.axes([0.95, 0.05, 0.02, 0.9]),
+    cbar = fig.colorbar(mesh, cax=fig.add_axes([0.95, 0.05, 0.02, 0.9]),
                         extend='max', ticks=range(5))
     cbar.ax.set_yticklabels(['0', '1', '2', '3', '4+'])
     cbar.ax.set_ylabel("Number of tasks on CPU core")
-    plt.subplots_adjust(bottom=0.05, right=0.9, top=0.95, left=0.05)
+    fig.subplots_adjust(bottom=0.05, right=0.9, top=0.95, left=0.05)
 
-    # Draw line with differences
-    axs[1].step(time_axis, differences, where='post', color='black', alpha=0.8)
+    # Draw line with differences, holding the last value until the end of trace
+    axs[1].step(time_edges, np.append(differences, differences[-1]), where='post', color='black', alpha=0.8)
 
     # Draw imbalances
     for i in imbalances:
@@ -98,7 +173,7 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     axs[1].add_collection(lc)
 
     # Draw line with sums
-    axs[2].step(time_axis, sums, where='post', color='black', alpha=0.8)
+    axs[2].step(time_edges, np.append(sums, sums[-1]), where='post', color='black', alpha=0.8)
 
     axs[0].set_ylabel("CPUs")
     axs[1].set_ylabel("Max difference")
@@ -110,21 +185,10 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     axs[2].set_ylim(bottom=0)
     axs[2].grid()
 
-    # Separate CPUs with lines by NUMA nodes
-    plt.sca(axs[0])
-    if numa_cpus:
-        axs[0].grid(True, which='major', axis='y', linestyle='--', color='w')
-        if map_values.shape[0] <= MINOR_TICK_CPU_LIMIT:
-            axs[0].yaxis.set_minor_locator(MultipleLocator(1))
-        plt.yticks(range(0, map_values.shape[0] - 1, len(next(iter(numa_cpus.values())))),
-                   map(lambda x: "Node " + str(x), range(len(numa_cpus.keys()))))
-    elif map_values.shape[0] <= MINOR_TICK_CPU_LIMIT:
-        axs[0].set_yticks(range(map_values.shape[0] - 1))
-
-    plt.title(title)
+    axs[0].set_title(title)
 
     if image_file:
-        plt.savefig(image_file)
+        fig.savefig(image_file)
     else:
         plt.show()
 
@@ -133,203 +197,247 @@ def draw_report(title, time_axis, map_values, differences, imbalances, sums, ima
     plt.close(fig)
 
 
-def read_nodes(lscpu_file):
-    numa_cpus = {}
-    NUMA_re = re.compile(r'NUMA.*CPU\(s\):')
-    for line in lscpu_file:
-        # Find number of CPUs and NUMA nodes:
-        if line[:7] == 'CPU(s):':
-            cpu_nb = int(line[7:])
-        elif line[:13] == 'NUMA node(s):':
-            nodes_nb = int(line[13:])
+def read_events(input_file):
+    """Parse the trace report.
 
-        # Find NUMA nodes associated with CPUs:
-        elif NUMA_re.search(line):
-            words = line.split()
-            cpus = words[-1].split(',')
-            for cpu in cpus:
-                if '-' in cpu:
-                    w = cpu.split('-')
-                    for i in range(int(w[0]), int(w[1]) + 1):
-                        numa_cpus.setdefault(int(words[1][4:]), []).append(i)
-                else:
-                    numa_cpus.setdefault(int(words[1][4:]), []).append(int(cpu))
-
-    return numa_cpus
-
-
-def process_report(title, input_file, sampling, time_sampling, threshold, duration, image_file=None, numa_cpus=None):
-    if numa_cpus is None:
-        numa_cpus = {}
-    time_axis = []
-    map_values = []
-    differences = []
-    imbalances = []
-    sums = []
-    counter = 0
-    cpus_count = 0
-
-    if time_sampling > 0:
-        sample_period = 1.0 / time_sampling
-    else:
-        sample_period = 0
-
-    reg_exp = re.compile(r"^cpus=(\d+)$")
-    while not cpus_count:
+    Returns (times, cpus, nr_running, initial) where initial is the number
+    of tasks on each CPU before the first recorded event, or None when the
+    input is not a usable trace report.
+    """
+    line_count = 0
+    while True:
         line = input_file.readline()
-        line_count = 1
-        match = reg_exp.findall(line)
+        line_count += 1
+        match = HEADER_RE.match(line)
         if match:
-            cpus_count = int(match[0])
-        elif "empty" in line:
+            cpus_count = int(match.group(1))
+            break
+        if "empty" in line:
             # Information of missing records for specific cpu
             continue
-        else:
-            print("ERROR: Couldn't get number of CPUs from the trace file.")
-            print("       Unexpected trace file format. First line is expected to have form '{}'".format(reg_exp.pattern))
-            print("       Input line: '{}'".format(line.rstrip('\n')))
-            print("       Exiting")
-            # Return rather than sys.exit(): process_report is reusable, and a
-            # SystemExit here would tear down any caller that imports it.
-            return
+        print("ERROR: Couldn't get number of CPUs from the trace file.")
+        print("       Unexpected trace file format. First line is expected to have form '{}'".format(HEADER_RE.pattern))
+        print("       Input line: '{}'".format(line.rstrip('\n')))
+        print("       Exiting")
+        return None
 
-    # For each line in trace report, row is NumPy array representing number of processes on each CPU
-    # -1 means no data yet
-    last_row = np.full(cpus_count, -1)
-    map_values.append(last_row)
+    times = array('d')
+    cpus = array('i')
+    values = array('i')
+    # CPUs without any event were idle for the whole trace
+    initial = [0] * cpus_count
+    seen = [False] * cpus_count
+    signed_change = False
 
-    point_time = 0
-
-    reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
     for line in input_file:
         line_count += 1
-        match = reg_exp.findall(line)
+        match = EVENT_RE.match(line)
 
         # Check the correct event
         if not match:
             if "sched_update_nr_running:" in line:
-                print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match findall regex '{}'!".format(line_count, reg_exp.pattern))
+                print("WARNING: Line number {} contains 'sched_update_nr_running:' string, but does not match regex '{}'!".format(line_count, EVENT_RE.pattern))
                 print(line, end='')
             continue
 
-        # pid = int(match[0][0])
-        point_time = float(match[0][1])
-        cpu = int(match[0][2])
-        change = int(match[0][3])
-        nr_running = int(match[0][4])
+        # pid = int(match.group(1))
+        point_time = float(match.group(2))
+        cpu = int(match.group(3))
+        change = int(match.group(4))
+        nr_running = int(match.group(5))
 
-        if last_row[cpu] == -1:
-            # First time we got data for this CPU. Compute previous value as nr_running - change
-            # and update all data already stored
-            for val in map_values:
-                val[cpu] = nr_running - change
+        if cpu >= cpus_count:
+            print("WARNING: Line number {} reports cpu={}, but the trace has only {} CPUs. Skipping.".format(line_count, cpu, cpus_count))
+            continue
 
-        row = np.copy(last_row)
-        row[cpu] = nr_running
+        if change < 0:
+            signed_change = True
+
+        if not seen[cpu]:
+            # First time we got data for this CPU, so the value before the
+            # trace started is nr_running - change. Older kernels record
+            # the change unsigned, so a negative result means a decrement.
+            seen[cpu] = True
+            previous = nr_running - change
+            if previous < 0:
+                previous = nr_running + change
+            initial[cpu] = previous
+
+        times.append(point_time)
+        cpus.append(cpu)
+        values.append(nr_running)
+
+    if times and not signed_change:
+        print("NOTE: No negative 'change' values found, the kernel probably records them unsigned."
+              " Values before the first event of each CPU may be inaccurate.")
+
+    return times, cpus, values, initial
+
+
+def replay_events(times, cpus, values, initial, sampling, time_sampling, threshold, duration):
+    """Reconstruct the number of tasks on every CPU after each event.
+
+    Imbalances are searched on every event. Only the sampled states are
+    kept for plotting. Returns (time_axis, states, differences, sums,
+    imbalances), where states[i] is the state from time_axis[i] until the
+    next sample.
+    """
+    times = np.frombuffer(times, dtype=np.float64)
+    cpus = np.frombuffer(cpus, dtype=np.intc)
+    values = np.frombuffer(values, dtype=np.intc)
+    cpus_count = len(initial)
+    columns = np.arange(cpus_count)
+    state = np.array(initial, dtype=np.int32)
+
+    sampling = max(sampling, 1)
+    sample_period = 1.0 / time_sampling if time_sampling > 0 else 0
+    chunk = max(1024, REPLAY_CHUNK_CELLS // cpus_count)
+
+    time_axis = []
+    states = []
+    differences = []
+    sums = []
+    imbalances = []
+    imbalance_start = None
+    last_sample_time = None
+
+    def end_imbalance(start, end):
+        # Print and store long imbalances
+        if end - start >= duration:
+            imbalances.append([(start, threshold), (end, threshold)])
+            print(f"Imbalance from timestamp {start} lasting {end - start} seconds")
+
+    for first in range(0, len(times), chunk):
+        chunk_times = times[first:first + chunk]
+        rows = np.arange(1, len(chunk_times) + 1)
+
+        # Row 0 holds the state before this chunk, row i the value changed by
+        # event i. Forward-fill each CPU column with its last changed value.
+        grid = np.empty((len(rows) + 1, cpus_count), dtype=np.int32)
+        grid[0] = state
+        grid[rows, cpus[first:first + chunk]] = values[first:first + chunk]
+        source = np.zeros(grid.shape, dtype=np.intp)
+        source[rows, cpus[first:first + chunk]] = rows
+        np.maximum.accumulate(source, axis=0, out=source)
+        filled = grid[source, columns][1:]
+        state = filled[-1]
+
+        diff = filled.max(axis=1) - filled.min(axis=1)
+
+        # Find starts and ends of imbalances
+        imbalanced = diff >= threshold
+        before = np.concatenate(([imbalance_start is not None], imbalanced[:-1]))
+        for i in np.flatnonzero(imbalanced != before):
+            if imbalanced[i]:
+                imbalance_start = float(chunk_times[i])
+            else:
+                end_imbalance(imbalance_start, float(chunk_times[i]))
+                imbalance_start = None
 
         # Store plotting data with optional sampling
-        counter += 1
-        if counter >= sampling:
-            counter = 0
-            if not time_axis or (point_time - time_axis[-1]) >= sample_period:
-                map_values.append(row)
-                time_axis.append(point_time)
-        last_row = row
+        selected = np.flatnonzero((first + rows) % sampling == 0)
+        if sample_period:
+            kept = []
+            for i in selected:
+                if last_sample_time is None or chunk_times[i] - last_sample_time >= sample_period:
+                    kept.append(i)
+                    last_sample_time = chunk_times[i]
+            selected = np.array(kept, dtype=np.intp)
 
-    last_imbalance_start = 0
-
-    if len(time_axis) == 0:
-        print("No sched_update_nr_running found. Exiting.")
-        # Return rather than sys.exit(): see note above.
-        return
-
-    # Second run to compute imbalances - process all rows from map_values
-    for i, time in enumerate(time_axis):
-        row_min = min(map_values[i])
-        row_max = max(map_values[i])
-        diff = row_max - row_min
-
-        # Check the start of imbalance
-        if diff >= threshold and last_imbalance_start == 0:
-            last_imbalance_start = time
-        if diff < threshold and last_imbalance_start != 0:
-            # Print and store long imbalances
-            if (time - last_imbalance_start) >= duration:
-                imbalances.append([(last_imbalance_start, threshold),
-                                   (time, threshold)])
-                print(f"Imbalance from timestamp {last_imbalance_start}"
-                      f" lasting {time - last_imbalance_start} seconds")
-            last_imbalance_start = 0
-
-        differences.append(diff)
-        sums.append(sum(map_values[i]))
+        time_axis.append(chunk_times[selected])
+        states.append(filled[selected])
+        differences.append(diff[selected])
+        sums.append(filled[selected].sum(axis=1))
 
     # Check for unreported imbalance lasting to the very end of input
-    if last_imbalance_start != 0 \
-       and (time_axis[-1] - last_imbalance_start) >= duration:
-        imbalances.append([(last_imbalance_start, threshold),
-                           (time_axis[-1], threshold)])
-        print(f"Imbalance from timestamp {last_imbalance_start}"
-              f" lasting {time_axis[-1] - last_imbalance_start} seconds")
+    if imbalance_start is not None:
+        end_imbalance(imbalance_start, float(times[-1]))
+
+    return (np.concatenate(time_axis), np.concatenate(states), np.concatenate(differences),
+            np.concatenate(sums), imbalances)
+
+
+def process_report(title, input_file, sampling, time_sampling, threshold, duration, image_file=None, numa_cpus=None):
+    events = read_events(input_file)
+    if events is None:
+        # Return rather than sys.exit(): process_report is reusable, and a
+        # SystemExit here would tear down any caller that imports it.
+        return None
+
+    times = events[0]
+    if not times:
+        print("No sched_update_nr_running found. Exiting.")
+        return None
+
+    time_axis, map_values, differences, sums, imbalances = replay_events(
+        *events, sampling, time_sampling, threshold, duration)
+
+    if len(time_axis) == 0:
+        print("No data left after sampling. Exiting.")
+        return None
 
     if not imbalances:
         print("No imbalance found")
 
-    draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file, numa_cpus)
+    draw_report(title, time_axis, map_values, differences, imbalances, sums, image_file, numa_cpus,
+                end_time=times[-1])
     return time_axis, map_values, differences, imbalances
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(
         description="Create heatmap and find imbalances from recorded"
         " sched_update_nr_running events with trace-cmd.")
     parser.add_argument("input_file", nargs="?", type=argparse.FileType('r'), default=sys.stdin)
     parser.add_argument("--sampling", default=1, type=int,
-                        help="Sampling of input data to reduce drawing time"
-                        " - takes each N-th line of input file."
-                        " Is applied before time sampling.")
+                        help="Sampling of plotted data to reduce drawing time"
+                        " - takes each N-th event. Is applied before time"
+                        " sampling. Imbalances are always searched on all events.")
     parser.add_argument("--time-sampling", default=0, type=int,
-                        help="Reduce input data to N records per core per"
-                        " second to shorten drawing time."
-                        " Is applied after input sampling.")
+                        help="Reduce plotted data to N records per second"
+                        " to shorten drawing time. Is applied after input sampling.")
     parser.add_argument("--threshold", default=2, type=int,
                         help="Minimal difference of process count considered as imbalance")
     parser.add_argument("--duration", default=0.05, type=float,
                         help="Minimal duration of imbalance worth reporting")
     parser.add_argument("--image-file", type=str, default=None,
-                        help="Save plotted heatmap to file instead of showing")
+                        help="Save plotted heatmap to this file. Defaults to INPUT_FILE.png,"
+                        " the heatmap is shown in a window when reading from stdin.")
     parser.add_argument("--lscpu-file", type=argparse.FileType('r'), default=None,
                         help="File with output of lscpu from observed machine")
     parser.add_argument("--name", type=str, default=None,
                         help="Filename to be displayed in graph."
                         " Usefull when reading input from stdin.")
-    parser.add_argument("--title", type=str, default=None, help="Future title")
+    parser.add_argument("--title", type=str, default=None,
+                        help="Title of the graph. Overrides --name.")
 
     try:
         args = parser.parse_args()
     except SystemExit:
-        sys.exit(1)
+        return 1
 
     numa_cpus = {}
     if args.lscpu_file:
         numa_cpus = read_nodes(args.lscpu_file)
 
-    if args.name:
-        title = "Plot of '" + args.name
-    else:
-        title = "Plot of '" + args.input_file.name
+    title = args.title or "Plot of '{}'".format(args.name or args.input_file.name)
 
-    if not args.image_file:
+    if not args.image_file and args.input_file is not sys.stdin:
         args.image_file = args.input_file.name + ".png"
 
     if args.input_file.name.endswith(".xz"):
         args.input_file.close()
-        import lzma
         with lzma.open(args.input_file.name, 'rt') as decompressed:
-            process_report(title, decompressed, args.sampling,
-                           args.time_sampling, args.threshold,
-                           args.duration, args.image_file, numa_cpus)
+            result = process_report(title, decompressed, args.sampling,
+                                    args.time_sampling, args.threshold,
+                                    args.duration, args.image_file, numa_cpus)
     else:
-        process_report(title, args.input_file, args.sampling,
-                       args.time_sampling, args.threshold,
-                       args.duration, args.image_file, numa_cpus)
+        result = process_report(title, args.input_file, args.sampling,
+                                args.time_sampling, args.threshold,
+                                args.duration, args.image_file, numa_cpus)
+
+    return 0 if result is not None else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
