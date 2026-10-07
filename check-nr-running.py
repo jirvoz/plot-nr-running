@@ -28,27 +28,25 @@ import pprint
 from prettytable import PrettyTable
 import numpy
 
-def read_nodes(lscpu_file):
-    numa_cpus = {}
-    NUMA_re=re.compile(r'NUMA.*CPU\(s\):')
-    for line in lscpu_file:
-        # Find number of CPUs and NUMA nodes:
-        if line[:7] == 'CPU(s):':
-            cpu_nb = int(line[7:])
-        elif line[:13] == 'NUMA node(s):':
-            nodes_nb = int(line[13:])
+def percent(part, total):
+    # A trace with a single timestamp has zero total time
+    return '{:4.1f}'.format(part / total * 100.0) if total else '-'
 
-        # Find NUMA nodes associated with CPUs:
-        elif NUMA_re.search(line):
-            words = line.split()
-            cpus = words[-1].split(',')
-            for cpu in cpus:
-                if '-' in cpu:
-                    w = cpu.split('-')
-                    for i in range(int(w[0]), int(w[1]) + 1):
-                        numa_cpus.setdefault(int(words[1][4:]), []).append(i)
-                else:
-                    numa_cpus.setdefault(int(words[1][4:]), []).append(int(cpu))
+def read_nodes(lscpu_file):
+    """Return {node: [cpu, ...]} parsed from lscpu output, in lscpu order."""
+    numa_cpus = {}
+    numa_re = re.compile(r'NUMA node(\d+) CPU\(s\):\s*(\S*)')
+    for line in lscpu_file:
+        match = numa_re.search(line)
+        if not match:
+            continue
+        cpus = []
+        # Memory-only nodes (CXL, HBM, ...) have an empty CPU list
+        for cpu_range in filter(None, match.group(2).split(',')):
+            first, _, last = cpu_range.partition('-')
+            cpus.extend(range(int(first), int(last or first) + 1))
+        if cpus:
+            numa_cpus[int(match.group(1))] = cpus
 
     return numa_cpus
 
@@ -79,6 +77,10 @@ else:
 reg_exp = re.compile(r"^cpus=(\d+)$")
 line = data_file.readline()
 line_count = 1
+# Skip information of missing records for specific cpu
+while "empty" in line:
+    line = data_file.readline()
+    line_count += 1
 match = reg_exp.findall(line)
 if match:
     cpus_count = int(match[0])
@@ -96,6 +98,10 @@ inconsistent_events = dict()
 inconsistent_events = defaultdict(lambda:0, inconsistent_events)
 previous_line = dict()
 events_count = 0
+# Older kernels record the change unsigned, so a decrement shows up as a
+# positive change. Until a negative change is seen, a positive change that
+# matches a decrement is treated as one.
+signed_change = False
 
 reg_exp = re.compile(r"^.*-(\d+).*\s(\d+[.]\d+): sched_update_nr_running: cpu=(\d+) change=([-]?\d+) nr_running=(\d+)")
 for line in data_file:
@@ -115,6 +121,15 @@ for line in data_file:
     cpu = int(match[0][2])
     change = int(match[0][3])
     nr_running = int(match[0][4])
+
+    if change < 0:
+        signed_change = True
+    elif not signed_change:
+        if cpu in cpu_nr_running:
+            if nr_running + change == cpu_nr_running[cpu]:
+                change = -change
+        elif nr_running - change < 0:
+            change = -change
 
     prev_nr_running = nr_running - change
     if prev_nr_running < 0:
@@ -182,6 +197,10 @@ for line in data_file:
                 runtime=(start_time,None)
                 cpu_run_intervals[cpu].append(runtime)
                 continue
+            else:
+                #To proper account for idle interval, let's pretend it CPU was running at start_time
+                runtime=(start_time, start_time)
+                cpu_run_intervals[cpu].append(runtime)
         else:
             if current_state == "Running":
                 #CPU went from Idle to Running
@@ -199,7 +218,15 @@ for line in data_file:
 #        print(line,end='')
 #        pprint.pprint(cpu_run_intervals[67])
 #        print(current_state)
-                
+
+if not events_count:
+    print("No sched_update_nr_running found. Exiting.")
+    sys.exit(1)
+
+if not signed_change:
+    print("NOTE: No negative 'change' values found, the kernel probably records them unsigned.")
+    print("      Positive changes matching a decrement were treated as decrements.")
+
 stop_time = point_time
 for cpu in cpu_state:
     if cpu_state[cpu] == "Running":
@@ -212,6 +239,11 @@ for cpu in cpu_state:
         runtime = (stop_time, stop_time)
         cpu_run_intervals[cpu].append(runtime)
 
+# CPUs without any event were idle for the whole trace
+for cpu in range(cpus_count):
+    if cpu not in cpu_run_intervals:
+        cpu_run_intervals[cpu] = [(start_time, start_time), (stop_time, stop_time)]
+
 #print("Start and stop times")
 #pprint.pprint([start_time, stop_time])
 #for cpu in [67,68]:
@@ -222,7 +254,7 @@ for cpu in cpu_state:
 cpu_util_table = PrettyTable(['CPU', 'Runtime (s)', 'Runtime %', 'Idle (s)', 'Idle %','Total time (s)'])
 cpu_util = dict()
 
-for idx,cpu in enumerate(sorted(cpu_run_intervals)):
+for cpu in sorted(cpu_run_intervals):
     time=[numpy.float64(0.0),numpy.float64(0.0)]
     last_idle_transition=-1.0
     #element 0 => runtime
@@ -239,13 +271,13 @@ for idx,cpu in enumerate(sorted(cpu_run_intervals)):
             print("ERROR - end time of runtime interval for cpu", cpu, "is undefined")
             print("Code should never get into this state. Please contact authors")
             print("Runtime interval:")
-            pprint.pprint(cpu_run_intervals[cpu][idx])
+            pprint.pprint(intervals)
             
     cpu_util[cpu]=time
     total = time[0] + time[1]
     result = [cpu,
-        '{:4.1f}'.format(time[0]), '{:4.1f}'.format(time[0]/total*100.0),
-        '{:4.1f}'.format(time[1]), '{:4.1f}'.format(time[1]/total*100.0),
+        '{:4.1f}'.format(time[0]), percent(time[0], total),
+        '{:4.1f}'.format(time[1]), percent(time[1], total),
         '{:4.1f}'.format(total)]
     cpu_util_table.add_row(result)
 
@@ -259,14 +291,12 @@ if numa_cpus:
         if not node in numa_util:
             numa_util[node] = numpy.zeros(2)
         for cpu in numa_cpus[node]:
-            if not cpu in cpu_util:
-                #Cpu was idle whole time
-                cpu_util[cpu]=[numpy.float64(0.0),numpy.float64(stop_time-start_time)]
-            numa_util[node] += cpu_util[cpu]
+            if cpu in cpu_util:
+                numa_util[node] += cpu_util[cpu]
         total = numa_util[node][0] + numa_util[node][1]
         result = [node,
-            '{:4.1f}'.format(numa_util[node][0]/total*100),
-            '{:4.1f}'.format(numa_util[node][1]/total*100)]
+            percent(numa_util[node][0], total),
+            percent(numa_util[node][1], total)]
         numa_util_table.add_row(result)
     print(numa_util_table)
 
@@ -277,8 +307,8 @@ for cpu in cpu_util:
 average_util_table = PrettyTable(['Average', 'Runtime %', 'Idle %'])
 total = average_util[0] + average_util[1]
 result = ['',
-    '{:4.1f}'.format(average_util[0]/total*100),
-    '{:4.1f}'.format(average_util[1]/total*100)]
+    percent(average_util[0], total),
+    percent(average_util[1], total)]
 average_util_table.add_row(result)
 print(average_util_table)
 
