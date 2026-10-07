@@ -19,10 +19,10 @@
 LANG=C
 
 #{{{ trap - signal handling
-# Pass the signal to child processes and stop. Bash runs the trap only after
-# the current foreground command finishes, so this mainly stops the loop.
-# Not trapping EXIT, as signalling on normal exits (usage, errors) could
-# interrupt the calling shell when the script shares its process group.
+# Terminate child processes and stop. Long commands are started through
+# run_child, because bash runs the trap only after a foreground command
+# finishes. Not trapping EXIT, as signalling on normal exits (usage, errors)
+# could interrupt the calling shell when the script shares its process group.
 
 trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
   local func="$1"; shift
@@ -35,11 +35,18 @@ trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
 stop() {
   trap - SIGINT SIGTERM SIGHUP
   printf '\nFunction stop(), part of trap handling in plot-nr-running_batch.sh: %s\n' "received $1, killing children"
-  pkill -"$1" -P $$
+  # Background children ignore SIGINT, so always terminate them with SIGTERM
+  pkill -TERM -P $$
   exit 1
 }
 
 trap_with_arg 'stop' SIGINT SIGTERM SIGHUP
+
+# Run command in background and wait for it, a signal interrupts the wait
+run_child() {
+  "$@" &
+  wait $!
+}
 #}}}
 
 function usage_msg() {
@@ -186,7 +193,7 @@ for DIR in "${FOUND_DIRS[@]}"; do
       printf "'%s'\n" "${FILES[@]}"
     fi
     printf "Running %s\n" "${PROCESS_COMMAND[*]} ${FILES[*]}"
-    if "${PROCESS_COMMAND[@]}" "${FILES[@]}"; then
+    if run_child "${PROCESS_COMMAND[@]}" "${FILES[@]}"; then
       echo "Successfully processed trace files from '${DIR}'"
       OK_DIR+=("$DIR")
     else

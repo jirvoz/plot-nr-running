@@ -19,10 +19,10 @@
 LANG=C
 
 #{{{ trap - signal handling
-# Pass the signal to child processes and stop. Bash runs the trap only after
-# the current foreground command finishes, so this mainly stops the loop.
-# Not trapping EXIT, as signalling on normal exits (usage, errors) could
-# interrupt the calling shell when the script shares its process group.
+# Terminate child processes and stop. Long commands are started through
+# run_child, because bash runs the trap only after a foreground command
+# finishes. Not trapping EXIT, as signalling on normal exits (usage, errors)
+# could interrupt the calling shell when the script shares its process group.
 
 trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
   local func="$1"; shift
@@ -36,11 +36,18 @@ trap_with_arg() { # from https://stackoverflow.com/a/2183063/804678
 stop() {
   trap - SIGINT SIGTERM SIGHUP
   printf '\nFunction stop(), part of trap handling in plot-nr-running.sh: %s\n' "received $1, killing children"
-  pkill -"$1" -P $$
+  # Background children ignore SIGINT, so always terminate them with SIGTERM
+  pkill -TERM -P $$
   exit 1
 }
 
 trap_with_arg 'stop' SIGINT SIGTERM SIGHUP
+
+# Run command in background and wait for it, a signal interrupts the wait
+run_child() {
+  "$@" &
+  wait $!
+}
 #}}}
 
 function usage_msg() {
@@ -106,7 +113,7 @@ if [[ "$argParallel" == "0" ]]; then
       continue
     fi
 
-    "${COMMAND[@]}"
+    run_child "${COMMAND[@]}"
     ret_code=$?
 
     if [[ "$ret_code" -ne 0 ]]; then
@@ -115,7 +122,7 @@ if [[ "$argParallel" == "0" ]]; then
       printf "%s\n" "${COMMAND[*]}"
     fi
 
-    "${COMMAND1[@]}" > "$out_file1"
+    run_child "${COMMAND1[@]}" > "$out_file1"
     ret_code=$?
 
     if [[ "$ret_code" -ne 0 ]]; then
@@ -128,18 +135,19 @@ if [[ "$argParallel" == "0" ]]; then
 
 else
   command -v "parallel" >/dev/null 2>&1 || { echo >&2 "GNU parallel is required, but it's not installed."; exit 1; }
-  declare -a parOpt=("--verbose" "--memfree=4G")
-  [[ "$argDry" == "1" ]] && parOpt+=("--dry-run")
+  declare -a parOpt=("--memfree=4G")
+  # --dry-run prints the commands itself, --verbose would print them twice
+  if [[ "$argDry" == "1" ]]; then parOpt+=("--dry-run"); else parOpt+=("--verbose"); fi
   (( argParallelJobs > 0 )) && parOpt+=("--jobs=$argParallelJobs")
   COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/check-nr-running.py" "--lscpu=$argLscpu" "{}" ">" "{.}.info" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
-  "${COMMAND[@]}" || failed=1
+  run_child "${COMMAND[@]}" || failed=1
 
   COMMAND=("parallel" "${parOpt[@]}" "${SCRIPT_DIR}/plot-nr-running.py" "--lscpu=$argLscpu" "--image-file" "{.}.png" "{}" ">" "{.}.log" ":::" "$@")
   printf "'%s' " "${COMMAND[@]}"
   echo
-  "${COMMAND[@]}" || failed=1
+  run_child "${COMMAND[@]}" || failed=1
 fi
 
 trap - SIGINT SIGTERM SIGHUP
